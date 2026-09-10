@@ -25,6 +25,11 @@ import frappe
 from frappe import _
 
 from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.supplier_master_data import (
+    add_master_data_review,
+    review_supplier_master_data,
+    submission_blocker,
+)
 
 
 class DocumentCreate(BaseTool):
@@ -43,6 +48,13 @@ class DocumentCreate(BaseTool):
         self.name = "create_document"
         self.description = "Create new Frappe documents with proper validation and child table support. Supports all DocTypes including those with child tables. WORKFLOW: First use get_doctype_info to understand the DocType structure, identify required fields and child tables, then create the document with proper field values. Child tables must be provided as arrays of objects. Referenced records (customers, items, warehouses, etc.) must already exist in the system. Use exact field names as shown in DocType metadata. Error responses include specific guidance for resolution. Common use cases: creating Sales Orders with line items, Purchase Orders with items and taxes, customer records, inventory transactions."
         self.requires_permission = None  # Permission checked dynamically per DocType
+        self.description += (
+            " SUPPLIER INVOICES: Creating a Supplier does not complete invoice intake. "
+            "Read the source payment section, create/link its Address and verify structured "
+            "Supplier.iban or Bank Account data. Bank details in remarks do not count. "
+            "Check master_data_review in the response. Purchase Invoice submission is blocked "
+            "while supplier master data is incomplete or unverifiable; do not bypass the check."
+        )
 
         self.inputSchema = {
             "type": "object",
@@ -184,20 +196,31 @@ class DocumentCreate(BaseTool):
             # not yet run when we'd inspect doc.get(f). MandatoryError is caught
             # below and translated into the same structured error shape.
 
-            # Handle validation-only mode
+            # Check before insert: failed create-and-submit must not leave a new draft behind.
+            master_data_review = None
+            if doctype == "Purchase Invoice":
+                master_data_review = review_supplier_master_data(doc)
+                if submit or str(doc.get("docstatus")) == "1":
+                    blocked = submission_blocker(master_data_review)
+                    if blocked:
+                        return blocked
+
             if validate_only:
                 # Run validation without saving
                 doc.run_method("validate")
 
-                return {
-                    "success": True,
-                    "validation_passed": True,
-                    "doctype": doctype,
-                    "message": f"{doctype} data validation passed successfully",
-                    "fields_validated": list(data.keys()),
-                    "child_tables": list(table_fields.keys()) if table_fields else [],
-                    "next_step": "Use create_document with validate_only=false to actually create the document",
-                }
+                return add_master_data_review(
+                    {
+                        "success": True,
+                        "validation_passed": True,
+                        "doctype": doctype,
+                        "message": f"{doctype} data validation passed successfully",
+                        "fields_validated": list(data.keys()),
+                        "child_tables": list(table_fields.keys()) if table_fields else [],
+                        "next_step": "Use create_document with validate_only=false to actually create the document",
+                    },
+                    master_data_review,
+                )
 
             # Capture input child-table values for post-save comparison (issue #181)
             input_child_values = {}
@@ -288,7 +311,12 @@ class DocumentCreate(BaseTool):
             if warnings:
                 result["warnings"] = warnings
 
-            return result
+            if doctype == "Supplier":
+                master_data_review = review_supplier_master_data(doc)
+                result["message"] = f"Supplier '{doc.name}' created as a master-data record"
+                result["can_submit"] = False
+                result["next_steps"] = []
+            return add_master_data_review(result, master_data_review)
 
         except frappe.MandatoryError as e:
             # Frappe raises MandatoryError after set_missing_values() has run, so the

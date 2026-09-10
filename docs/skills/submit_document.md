@@ -2,6 +2,12 @@
 
 ## Overview
 
+Purchase Invoice submission includes the same supplier-master-data check as
+`create_document(submit=true)`. Inspect `master_data_review`: a valid, linked and
+selected supplier address plus structured bank details are required. Missing or
+unverifiable data must be reviewed, not bypassed via another write tool. This is
+a structural check, not payment approval or proof of source-document matching.
+
 The `submit_document` tool finalizes a draft document, changing its `docstatus` from 0 (Draft) to 1 (Submitted). Only works on **submittable** DocTypes.
 
 ## Parameters

@@ -25,6 +25,11 @@ import frappe
 from frappe import _
 
 from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.supplier_master_data import (
+    add_master_data_review,
+    review_supplier_master_data,
+    submission_blocker,
+)
 
 
 class DocumentSubmit(BaseTool):
@@ -42,6 +47,11 @@ class DocumentSubmit(BaseTool):
         self.name = "submit_document"
         self.description = "Submit a draft document after validation. Only works with documents in draft state (docstatus=0). Use when users want to finalize a document."
         self.requires_permission = None  # Permission checked dynamically per DocType
+        self.description += (
+            " Purchase Invoice submission also requires a complete linked supplier address "
+            "and verifiable structured supplier bank details. Inspect master_data_review; "
+            "missing details in master data cannot be replaced by invoice remarks."
+        )
 
         self.inputSchema = {
             "type": "object",
@@ -113,6 +123,10 @@ class DocumentSubmit(BaseTool):
                 return result
 
             # Perform submission
+            master_data_review = review_supplier_master_data(doc)
+            blocked = submission_blocker(master_data_review)
+            if blocked:
+                return blocked
             doc.submit()
 
             # Get updated document state
@@ -151,7 +165,7 @@ class DocumentSubmit(BaseTool):
                 ]
 
             # Log successful submission
-            return result
+            return add_master_data_review(result, master_data_review)
 
         except Exception as e:
             frappe.log_error(
