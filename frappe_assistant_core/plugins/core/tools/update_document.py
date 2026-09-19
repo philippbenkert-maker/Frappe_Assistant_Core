@@ -25,6 +25,11 @@ import frappe
 from frappe import _
 
 from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.supplier_master_data import (
+    add_master_data_review,
+    review_supplier_master_data,
+    submission_blocker,
+)
 
 
 def _restricted_fields_for_doctype(doctype: str, user_role: str) -> Set[str]:
@@ -342,6 +347,11 @@ class DocumentUpdate(BaseTool):
                     setattr(doc, field, value)
 
             # Save document
+            master_data_review = review_supplier_master_data(doc) if doctype == "Purchase Invoice" else None
+            if doctype == "Purchase Invoice" and current_docstatus == 0 and str(doc.get("docstatus")) == "1":
+                blocked = submission_blocker(master_data_review)
+                if blocked:
+                    return blocked
             doc.save()
 
             # Get updated document state
@@ -390,7 +400,12 @@ class DocumentUpdate(BaseTool):
                 ]
 
             # Log successful update
-            return result
+            if doctype == "Supplier":
+                master_data_review = review_supplier_master_data(doc)
+                result["state_description"] = "Master data"
+                result["can_submit"] = False
+                result["next_steps"] = []
+            return add_master_data_review(result, master_data_review)
 
         except Exception as e:
             frappe.log_error(

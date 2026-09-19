@@ -30,6 +30,28 @@ The `create_document` tool creates new Frappe documents (records). It handles fi
 
 ## Best Practices
 
+### Supplier invoice intake
+
+Creating a Supplier is only one step of invoice intake. Read the complete source,
+including the payment section, and resolve the supplier identity first. Store a
+complete Address with a Supplier Dynamic Link and select it as `supplier_address`
+on the invoice. Store verified bank details in `Supplier.iban` (where available)
+or a supplier-owned Bank Account; an IBAN in `remarks` is not master data.
+
+Inspect `master_data_review` after Supplier or Purchase Invoice operations.
+`success=true` confirms the individual write, not a complete import. Supplier
+records are not submittable drafts. Missing data must be reported as open work.
+Read back the linked records before reporting completion. Never fabricate bank
+details, and never silently replace an existing account based on OCR.
+
+Purchase Invoice submission is blocked before insertion when the master-data
+review is incomplete or unverifiable. Save a draft for unresolved intake; cash,
+card, non-IBAN and changed-bank cases need manual review. Structural completeness
+does not authorize payment or prove that an account matches the source invoice.
+Do not route around a blocker using another tool.
+
+### General document creation
+
 1. **Check required fields first** — use `get_doctype_info` to see mandatory fields before creating.
 2. **Use `validate_only: true` first** — test your data structure without actually creating the document.
 3. **Link fields expect the `name` (ID)** — not the display title. Use `search_link` to find valid values.
