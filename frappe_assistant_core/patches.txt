@@ -32,3 +32,4 @@ frappe_assistant_core.patches.v2_5.report_non_admin_published_skills
 
 # Version 2.6.0 - MCP token and credit optimization
 frappe_assistant_core.patches.v2_6.enable_mcp_token_optimization
+frappe_assistant_core.patches.v2_6.enforce_mcp_token_optimization_flags
