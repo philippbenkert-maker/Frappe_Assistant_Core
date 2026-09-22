@@ -41,6 +41,24 @@
   "mcp_server_name",
   "mcp_protocol_version",
   "mcp_transport_type",
+  "mcp_token_optimization_section",
+  "mcp_token_optimization_enabled",
+  "mcp_default_tool_profile",
+  "mcp_max_tools",
+  "mcp_result_limits_column",
+  "mcp_max_result_chars",
+  "mcp_max_result_items",
+  "mcp_max_string_chars",
+  "mcp_result_ttl_seconds",
+  "mcp_compact_json",
+  "mcp_concise_descriptions",
+  "mcp_max_description_chars",
+  "mcp_workload_limits_section",
+  "mcp_max_list_rows",
+  "mcp_max_report_rows",
+  "mcp_workload_limits_column",
+  "mcp_max_ocr_pages",
+  "mcp_max_code_output_chars",
   "skills_section",
   "skill_mode",
   "oauth_tab",
@@ -288,12 +306,126 @@
    "description": "Transport protocol used for MCP communication. StreamableHTTP enables OAuth-based authentication."
   },
   {
+   "fieldname": "mcp_token_optimization_section",
+   "fieldtype": "Section Break",
+   "label": "Token & Credit Optimization",
+   "description": "Server-enforced limits for every MCP client. Per-user profiles on User override the default profile."
+  },
+  {
+   "default": "1",
+   "fieldname": "mcp_token_optimization_enabled",
+   "fieldtype": "Check",
+   "label": "Enable MCP Token Optimization",
+   "description": "Limit exposed tools and oversized responses. Full results remain temporarily pageable."
+  },
+  {
+   "default": "Lean",
+   "fieldname": "mcp_default_tool_profile",
+   "fieldtype": "Select",
+   "label": "Default Tool Profile",
+   "options": "Lean\nStandard\nFull",
+   "description": "Lean exposes the smallest daily-use set; Standard adds common write tools; Full exposes every permitted tool."
+  },
+  {
+   "default": "10",
+   "fieldname": "mcp_max_tools",
+   "fieldtype": "Int",
+   "label": "Maximum Exposed Tools",
+   "description": "Maximum tools in Lean, Standard, or Custom profiles. Full intentionally bypasses this limit."
+  },
+  {
+   "fieldname": "mcp_result_limits_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "12000",
+   "fieldname": "mcp_max_result_chars",
+   "fieldtype": "Int",
+   "label": "Maximum Result Characters",
+   "description": "Oversized results are compacted and retained for get_result_page. Minimum 2000."
+  },
+  {
+   "default": "20",
+   "fieldname": "mcp_max_result_items",
+   "fieldtype": "Int",
+   "label": "Maximum Preview Items",
+   "description": "Maximum items retained per list in an oversized result preview."
+  },
+  {
+   "default": "4000",
+   "fieldname": "mcp_max_string_chars",
+   "fieldtype": "Int",
+   "label": "Maximum String Characters",
+   "description": "Maximum characters retained per long string in an oversized preview."
+  },
+  {
+   "default": "900",
+   "fieldname": "mcp_result_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Continuation Lifetime (seconds)",
+   "description": "How long complete oversized results remain available for paging."
+  },
+  {
+   "default": "1",
+   "fieldname": "mcp_compact_json",
+   "fieldtype": "Check",
+   "label": "Use Compact JSON",
+   "description": "Remove formatting whitespace from model-visible JSON."
+  },
+  {
+   "default": "1",
+   "fieldname": "mcp_concise_descriptions",
+   "fieldtype": "Check",
+   "label": "Use Concise Tool Descriptions",
+   "description": "Bound tool descriptions while on-demand FAC skills retain detailed guidance."
+  },
+  {
+   "default": "280",
+   "fieldname": "mcp_max_description_chars",
+   "fieldtype": "Int",
+   "label": "Maximum Description Characters"
+  },
+  {
+   "fieldname": "mcp_workload_limits_section",
+   "fieldtype": "Section Break",
+   "label": "Workload Defaults",
+   "description": "Safe query-size defaults. The central result budget remains the final guardrail."
+  },
+  {
+   "default": "50",
+   "fieldname": "mcp_max_list_rows",
+   "fieldtype": "Int",
+   "label": "Maximum Document List Rows"
+  },
+  {
+   "default": "20",
+   "fieldname": "mcp_max_report_rows",
+   "fieldtype": "Int",
+   "label": "Maximum Report Preview Rows"
+  },
+  {
+   "fieldname": "mcp_workload_limits_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "5",
+   "fieldname": "mcp_max_ocr_pages",
+   "fieldtype": "Int",
+   "label": "Default Maximum OCR Pages"
+  },
+  {
+   "default": "16000",
+   "fieldname": "mcp_max_code_output_chars",
+   "fieldtype": "Int",
+   "label": "Maximum Python Output Characters"
+  },
+  {
    "fieldname": "skills_section",
    "fieldtype": "Section Break",
    "label": "Skills Configuration"
   },
   {
-   "default": "supplementary",
+   "default": "replace",
    "description": "Supplementary: tools keep full descriptions, skills provide additional guidance. Replace: tool descriptions are minimized when a skill exists, saving tokens.",
    "fieldname": "skill_mode",
    "fieldtype": "Select",

@@ -81,9 +81,9 @@ class AnalyzeFrappeData(BaseTool):
                 },
                 "limit": {
                     "type": "integer",
-                    "default": 1000,
-                    "maximum": 10000,
-                    "description": "📈 Max records to analyze (default: 1000). Increase for more comprehensive analysis, decrease for faster results. Handles large datasets efficiently.",
+                    "default": 50,
+                    "maximum": 1000,
+                    "description": "Maximum records requested; the site MCP row limit is enforced server-side.",
                 },
             },
             "required": ["doctype", "analysis_type"],
@@ -100,7 +100,13 @@ class AnalyzeFrappeData(BaseTool):
         fields = arguments.get("fields", [])
         filters = arguments.get("filters", {})
         date_field = arguments.get("date_field")
-        limit = arguments.get("limit", 1000)
+        from frappe_assistant_core.mcp.token_optimizer import get_optimization_config
+
+        configured_limit = get_optimization_config(frappe.session.user).max_list_rows
+        try:
+            limit = max(1, min(int(arguments.get("limit", configured_limit)), configured_limit))
+        except (TypeError, ValueError):
+            limit = configured_limit
 
         # Input validation
         if not doctype:

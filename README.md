@@ -213,6 +213,7 @@ For setup and advanced configuration:
 - [OAuth Quick Start](docs/getting-started/oauth/oauth_quick_start.md) — OAuth setup in 2 minutes
 - [Tool Reference](docs/api/TOOL_REFERENCE.md) — every tool, arguments, return format
 - [API Reference](docs/api/API_REFERENCE.md) — MCP endpoints and OAuth APIs
+- [MCP Token Optimization](docs/guides/MCP_TOKEN_OPTIMIZATION.md) — reduce ChatGPT context and credit usage
 - [Internals](docs/internals/INTERNALS.md) — system design and plugin internals
 - [External App Development](docs/development/EXTERNAL_APP_DEVELOPMENT.md) — add tools from your own Frappe app
 - [Full documentation index](docs/README.md) — everything else

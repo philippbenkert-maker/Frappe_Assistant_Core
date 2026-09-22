@@ -230,6 +230,26 @@
     "content_file": "search_vector.md"
   },
   {
+    "skill_id": "business-report-usage",
+    "title": "How to Use business_report",
+    "description": "Token-efficient report discovery, requirements, execution, summaries, and continuation paging",
+    "skill_type": "Tool Usage",
+    "linked_tool": "business_report",
+    "status": "Published",
+    "visibility": "Public",
+    "content_file": "business_report.md"
+  },
+  {
+    "skill_id": "result-page-usage",
+    "title": "How to Continue Large MCP Results",
+    "description": "Paging through compacted MCP results using result_id, path, and next_offset",
+    "skill_type": "Tool Usage",
+    "linked_tool": "get_result_page",
+    "status": "Published",
+    "visibility": "Public",
+    "content_file": "get_result_page.md"
+  },
+  {
   "skill_id": "insights-dashboard",
   "title": "How to Create Dashboards in Frappe Insights v3",
   "description": "Creating workbooks, queries, charts, and dashboards in Frappe Insights v3 — correct doctypes, config schemas, manifest updates, and common pitfalls",

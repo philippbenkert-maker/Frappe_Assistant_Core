@@ -64,6 +64,30 @@ def get_usage_statistics() -> dict:
             api_logger.warning(f"Recent activity error: {e}")
             recent_activity = []
 
+        # MCP context telemetry (estimated locally; provider billing remains
+        # authoritative). Grouping by user makes high-consumption accounts such
+        # as a pilot user immediately visible without inspecting raw logs.
+        try:
+            mcp_usage_by_user = frappe.get_all(
+                "Assistant Audit Log",
+                filters={"creation": (">=", week_start)},
+                fields=[
+                    "user",
+                    "count(name) as calls",
+                    "sum(mcp_input_bytes) as input_bytes",
+                    "sum(mcp_output_bytes) as original_output_bytes",
+                    "sum(mcp_transmitted_bytes) as transmitted_output_bytes",
+                    "sum(mcp_estimated_tokens) as estimated_tokens",
+                    "sum(mcp_output_truncated) as compacted_calls",
+                ],
+                group_by="user",
+                order_by="estimated_tokens desc",
+                limit=50,
+            )
+        except Exception as e:
+            api_logger.warning(f"MCP usage telemetry error: {e}")
+            mcp_usage_by_user = []
+
         return {
             "success": True,
             "data": {
@@ -71,6 +95,7 @@ def get_usage_statistics() -> dict:
                 "audit_logs": {"total": total_audit, "today": today_audit, "this_week": week_audit},
                 "tools": {"total": total_tools, "enabled": enabled_tools},
                 "recent_activity": recent_activity,
+                "mcp_usage_last_7_days": mcp_usage_by_user,
             },
         }
 

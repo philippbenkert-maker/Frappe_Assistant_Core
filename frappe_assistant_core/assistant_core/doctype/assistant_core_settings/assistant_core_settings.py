@@ -42,8 +42,25 @@ class AssistantCoreSettings(Document):
 
     def validate(self):
         """Validate settings before saving"""
-        # Plugin validation is handled by plugin manager
-        pass
+        # Plugin validation is handled by plugin manager. Clamp MCP limits here
+        # as a second line of defence against accidental zero/huge values.
+        integer_limits = {
+            "mcp_max_tools": (1, 100),
+            "mcp_max_result_chars": (2000, 200000),
+            "mcp_max_result_items": (1, 500),
+            "mcp_max_string_chars": (500, 100000),
+            "mcp_result_ttl_seconds": (60, 86400),
+            "mcp_max_description_chars": (80, 2000),
+            "mcp_max_list_rows": (1, 1000),
+            "mcp_max_report_rows": (1, 1000),
+            "mcp_max_ocr_pages": (1, 200),
+            "mcp_max_code_output_chars": (1000, 1000000),
+        }
+        for fieldname, (minimum, maximum) in integer_limits.items():
+            value = self.get(fieldname)
+            if value is None:
+                continue
+            self.set(fieldname, max(minimum, min(int(value), maximum)))
 
     def restart_assistant_core(self):
         """Restart the assistant MCP API with new settings"""

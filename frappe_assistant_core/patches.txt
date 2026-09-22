@@ -29,3 +29,6 @@ frappe_assistant_core.patches.v2_4.repair_hrms_skill_link_corruption
 
 # Version 2.5.0 - Skill publish/visibility permission fix (issue #225)
 frappe_assistant_core.patches.v2_5.report_non_admin_published_skills
+
+# Version 2.6.0 - MCP token and credit optimization
+frappe_assistant_core.patches.v2_6.enable_mcp_token_optimization

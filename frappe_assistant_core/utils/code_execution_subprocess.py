@@ -483,7 +483,7 @@ def main():
                 exec(code, execution_globals)  # noqa: S102  # nosemgrep: frappe-codeinjection-eval
 
             # Truncate output
-            max_output = 1024 * 1024  # 1 MB
+            max_output = max(1000, min(int(limits.get("max_output_chars", 16000)), 1000000))
             if len(output) > max_output:
                 output = (
                     output[:max_output]

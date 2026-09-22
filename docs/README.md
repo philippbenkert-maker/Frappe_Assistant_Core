@@ -37,7 +37,7 @@ System design, technical architecture, and implementation details:
 Complete API documentation and tool references:
 
 - **[API Reference](api/API_REFERENCE.md)** - MCP protocol endpoints and OAuth APIs
-- **[Tool Reference](api/TOOL_REFERENCE.md)** - Complete catalog of all 21 available tools
+- **[Tool Reference](api/TOOL_REFERENCE.md)** - Complete catalog of available tools
 
 ---
 
@@ -46,6 +46,7 @@ Complete API documentation and tool references:
 User guides for administrators managing the system:
 
 - **[Tool Management Guide](guides/TOOL_MANAGEMENT_GUIDE.md)** - Enable/disable tools, configure role-based access
+- **[MCP Token Optimization](guides/MCP_TOKEN_OPTIMIZATION.md)** - Tool profiles, result budgets, paging, and usage monitoring
 - **[Plugin Management Guide](guides/PLUGIN_MANAGEMENT_GUIDE.md)** - Enable/disable plugins, manage tool groups
 - **[Skills User Guide](guides/SKILLS_USER_GUIDE.md)** - Create, publish, and share markdown skills that teach the LLM how to use your tools
 
@@ -92,7 +93,8 @@ Additional resources and references:
 **🔧 System Administrators:**
 1. Follow [Getting Started Guide](getting-started/GETTING_STARTED.md)
 2. Configure [OAuth Setup](getting-started/oauth/oauth_setup_guide.md)
-3. Review [Performance Guide](architecture/PERFORMANCE.md)
+3. Configure [MCP Token Optimization](guides/MCP_TOKEN_OPTIMIZATION.md)
+4. Review [Performance Guide](architecture/PERFORMANCE.md)
 
 ### By Topic
 

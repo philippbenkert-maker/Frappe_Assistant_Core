@@ -319,10 +319,17 @@ class MCPServer:
         """Handle tools/list request with optional token optimization."""
         import frappe
 
+        from frappe_assistant_core.mcp.token_optimizer import (
+            concise_description,
+            get_optimization_config,
+        )
+
         if tool_registry is None:
             tool_registry = self._tool_registry
 
         tools_list = []
+
+        optimization_config = get_optimization_config(frappe.session.user)
 
         # Check skill_mode for token optimization
         skill_replace_map = {}
@@ -342,6 +349,9 @@ class MCPServer:
             if skill_replace_map and tool["name"] in skill_replace_map:
                 skill_info = skill_replace_map[tool["name"]]
                 description = f"{tool['name']}: {skill_info['description']}. Detailed guidance: fac://skills/{skill_info['skill_id']}"
+
+            if optimization_config.enabled and optimization_config.concise_descriptions:
+                description = concise_description(description, optimization_config.max_description_chars)
 
             tool_spec = {
                 "name": tool["name"],
@@ -366,6 +376,12 @@ class MCPServer:
         """
         import frappe
 
+        from frappe_assistant_core.mcp.token_optimizer import (
+            compact_tool_result,
+            get_optimization_config,
+            update_audit_metrics,
+        )
+
         if tool_registry is None:
             tool_registry = self._tool_registry
 
@@ -388,6 +404,11 @@ class MCPServer:
         fn = tool["fn"]
 
         try:
+            # Avoid attaching wire metrics to a previous call when a tool exits
+            # before BaseTool can create its own audit row (for example, a
+            # dependency check failure).
+            frappe.local.last_assistant_audit_log_name = None
+
             # Execute tool
             frappe.logger().info(f"MCP Executing tool: {tool_name}")
             result = fn(**arguments)
@@ -419,16 +440,24 @@ class MCPServer:
             if isinstance(result, dict):
                 image_content = result.pop("_image_content", None)
 
+            # Enforce one central response budget for every current and future
+            # tool. The complete value is retained briefly for continuation.
+            optimization_config = get_optimization_config(frappe.session.user)
+            result, metrics = compact_tool_result(result, frappe.session.user, optimization_config)
+
             # Serialize the text result (default=str handles datetime, Decimal, etc.)
             if isinstance(result, str):
                 result_text = result
             else:
-                result_text = json.dumps(
-                    result,
-                    default=str,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
+                json_kwargs = {"default": str, "ensure_ascii": False}
+                if optimization_config.compact_json:
+                    json_kwargs["separators"] = (",", ":")
+                else:
+                    json_kwargs["indent"] = 2
+                result_text = json.dumps(result, **json_kwargs)
+
+            metrics["transmitted_bytes"] = len(result_text.encode("utf-8"))
+            update_audit_metrics(tool_name, arguments, metrics)
 
             # Build MCP content blocks
             content = [{"type": "text", "text": result_text}]
@@ -454,8 +483,11 @@ class MCPServer:
             return {"content": content, "isError": is_error}
 
         except Exception as e:
+            # Keep full tracebacks in server logs, never in the paid model
+            # context where they are noisy and may expose implementation data.
+            traceback_text = traceback.format_exc()
             error_text = f"Error executing {tool_name}: {str(e)}"
-            frappe.logger().error(f"MCP Tool Execution Error: {error_text}\n{traceback.format_exc()}")
+            frappe.logger().error(f"MCP Tool Execution Error: {error_text}\n{traceback_text}")
 
             return {"content": [{"type": "text", "text": error_text}], "isError": True}
 

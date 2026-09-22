@@ -62,7 +62,7 @@ class ExecutePythonCode(BaseTool):
                         "doctype": {"type": "string"},
                         "fields": {"type": "array", "items": {"type": "string"}},
                         "filters": {"type": "object"},
-                        "limit": {"type": "integer", "default": 100},
+                        "limit": {"type": "integer", "default": 50},
                     },
                 },
                 "timeout": {
@@ -240,10 +240,14 @@ PRE-LOADED: pd (pandas), np (numpy), frappe, math, datetime, json, re, statistic
         import json as json_mod
         import subprocess
 
+        from frappe_assistant_core.mcp.token_optimizer import get_optimization_config
         from frappe_assistant_core.utils.execution_limits import get_execution_limits_from_settings
 
         # Get limits from settings
         limits = get_execution_limits_from_settings()
+        limits["max_output_chars"] = get_optimization_config(
+            current_user
+        ).max_code_output_chars
         effective_timeout = min(timeout, limits["timeout_seconds"]) if timeout else limits["timeout_seconds"]
 
         # Build the JSON request for the subprocess

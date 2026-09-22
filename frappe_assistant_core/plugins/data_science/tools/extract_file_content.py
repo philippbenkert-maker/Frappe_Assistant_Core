@@ -103,8 +103,8 @@ class ExtractFileContent(BaseTool):
                 },
                 "max_pages": {
                     "type": "integer",
-                    "default": 50,
-                    "description": "Maximum pages to process for PDFs",
+                    "default": 5,
+                    "description": "Maximum pages requested; the site MCP page limit is enforced server-side.",
                 },
             },
             "required": ["operation"],
@@ -117,6 +117,17 @@ class ExtractFileContent(BaseTool):
     def execute(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute file content extraction"""
         try:
+            from frappe_assistant_core.mcp.token_optimizer import get_optimization_config
+
+            arguments = dict(arguments or {})
+            configured_pages = get_optimization_config(frappe.session.user).max_ocr_pages
+            try:
+                arguments["max_pages"] = max(
+                    1, min(int(arguments.get("max_pages", configured_pages)), configured_pages)
+                )
+            except (TypeError, ValueError):
+                arguments["max_pages"] = configured_pages
+
             # Validate dependencies first
             dep_check = self._check_dependencies()
             if not dep_check["success"]:

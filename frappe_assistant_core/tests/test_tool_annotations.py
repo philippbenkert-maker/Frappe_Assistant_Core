@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 from werkzeug.wrappers import Request, Response
 
+from frappe_assistant_core.mcp.token_optimizer import MCPOptimizationConfig
 from frappe_assistant_core.tests.base_test import BaseAssistantTest
 from frappe_assistant_core.utils.tool_category_detector import category_to_annotations
 
@@ -207,6 +208,15 @@ class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
                     fac_endpoint,
                     "_resolve_tool_categories",
                     return_value={tool.name: "read_only"},
+                )
+            )
+            # This test verifies the single discovery pass independently of
+            # the built-in Lean profile, which intentionally excludes unknown
+            # custom tools.
+            stack.enter_context(
+                patch(
+                    "frappe_assistant_core.mcp.token_optimizer.get_optimization_config",
+                    return_value=MCPOptimizationConfig(profile="Full"),
                 )
             )
             built = fac_endpoint._build_tool_registry()
