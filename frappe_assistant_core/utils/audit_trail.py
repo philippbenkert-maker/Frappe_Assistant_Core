@@ -141,6 +141,9 @@ def log_tool_execution(
         )
 
         audit_doc.insert(ignore_permissions=True)
+        # Request-local correlation lets the MCP boundary attach exact wire
+        # sizes without exposing an internal audit id in the tool response.
+        frappe.local.last_assistant_audit_log_name = audit_doc.name
 
     except Exception as e:
         # Don't fail tool execution due to audit logging issues

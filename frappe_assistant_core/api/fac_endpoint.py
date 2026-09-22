@@ -100,6 +100,30 @@ def _build_tool_registry(profile_name=None):
                 tool_names=selected_tools,
             )
 
+        # Apply the site/user MCP profile before adapting tools. Profiles only
+        # narrow the permission-filtered registry; they never grant access.
+        from frappe_assistant_core.mcp.token_optimizer import (
+            get_optimization_config,
+            select_tool_metadata,
+        )
+
+        optimization_config = get_optimization_config(frappe.session.user)
+        if not profile_name:
+            # Built-in Lean/Standard/Custom profiles are the safe default when
+            # no explicit hook profile was selected. An explicit header/site
+            # profile has already narrowed the registry to a tested domain
+            # surface (for example kt-accounting) and therefore takes
+            # precedence over the generic built-in profile.
+            selected_metadata = select_tool_metadata(
+                [{"name": name} for name in available_tools],
+                optimization_config,
+            )
+            available_tools = OrderedDict(
+                (tool["name"], available_tools[tool["name"]])
+                for tool in selected_metadata
+                if tool["name"] in available_tools
+            )
+
         # Resolve each tool's category once (honors admin overrides stored on
         # FAC Tool Configuration; falls back to auto-detection).
         categories = _resolve_tool_categories(list(available_tools), registry, tool_instances=available_tools)
@@ -112,12 +136,11 @@ def _build_tool_registry(profile_name=None):
                 tool_dict["annotations"] = {**(tool_dict.get("annotations") or {}), **annotations}
             registry_dict[tool_name] = tool_dict
 
-        profile_label = profile_name or "all"
+        profile_label = profile_name or optimization_config.profile
         frappe.logger().info(
             f"Built {len(registry_dict)} enabled tools for user {frappe.session.user} "
             f"with profile {profile_label}"
         )
-
     except Exception as e:
         frappe.log_error(title="Tool Import Error", message=f"Error importing tools: {str(e)}")
 

@@ -159,11 +159,18 @@ def after_uninstall():
     try:
         frappe.logger("migration_hooks").info("Starting cleanup after app uninstall")
 
-        # Remove custom field from User doctype
-        if frappe.db.exists("Custom Field", {"dt": "User", "fieldname": "assistant_enabled"}):
-            frappe.delete_doc("Custom Field", "User-assistant_enabled", force=True, ignore_permissions=True)
-            frappe.db.commit()
-            frappe.logger("migration_hooks").info("Removed assistant_enabled custom field from User doctype")
+        # Remove custom fields from User doctype
+        for fieldname in (
+            "assistant_enabled",
+            "assistant_mcp_tool_profile",
+            "assistant_mcp_allowed_tools",
+        ):
+            if frappe.db.exists("Custom Field", {"dt": "User", "fieldname": fieldname}):
+                frappe.delete_doc(
+                    "Custom Field", f"User-{fieldname}", force=True, ignore_permissions=True
+                )
+        frappe.db.commit()
+        frappe.logger("migration_hooks").info("Removed assistant custom fields from User doctype")
 
         # Clean up tool cache
         from frappe_assistant_core.utils.tool_cache import get_tool_cache

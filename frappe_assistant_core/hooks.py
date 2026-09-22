@@ -265,7 +265,20 @@ after_migrate = [
 # --------
 
 fixtures = [
-    {"doctype": "Custom Field", "filters": {"dt": "User", "fieldname": ["in", ["assistant_enabled"]]}},
+    {
+        "doctype": "Custom Field",
+        "filters": {
+            "dt": "User",
+            "fieldname": [
+                "in",
+                [
+                    "assistant_enabled",
+                    "assistant_mcp_tool_profile",
+                    "assistant_mcp_allowed_tools",
+                ],
+            ],
+        },
+    },
     {"doctype": "Role", "filters": {"role_name": ["in", ["Assistant User", "Assistant Admin"]]}},
     # System prompt templates - these are installed via after_migrate hook
     # because they require special handling for child table data (arguments)

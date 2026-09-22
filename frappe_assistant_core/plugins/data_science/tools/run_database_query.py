@@ -73,9 +73,9 @@ class QueryAndAnalyse(BaseTool):
                 },
                 "limit": {
                     "type": "integer",
-                    "default": 100,
+                    "default": 50,
                     "maximum": 1000,
-                    "description": "Maximum number of rows to return",
+                    "description": "Maximum rows requested; the site MCP row limit is enforced server-side.",
                 },
             },
             "required": ["query"],
@@ -101,7 +101,10 @@ class QueryAndAnalyse(BaseTool):
             validate_query = arguments.get("validate_query", True)
             format_results = arguments.get("format_results", True)
             include_schema_info = arguments.get("include_schema_info", False)
-            limit = min(arguments.get("limit", 100), 1000)  # Cap at 1000 rows
+            from frappe_assistant_core.mcp.token_optimizer import get_optimization_config
+
+            configured_limit = get_optimization_config(frappe.session.user).max_list_rows
+            limit = max(1, min(int(arguments.get("limit", 100)), configured_limit, 1000))
 
             # Validate query security
             validation_result = self._validate_query_security(query)

@@ -29,6 +29,13 @@
   "input_data",
   "output_data",
   "output_truncated",
+  "mcp_metrics_section",
+  "mcp_input_bytes",
+  "mcp_output_bytes",
+  "mcp_transmitted_bytes",
+  "mcp_metrics_column",
+  "mcp_estimated_tokens",
+  "mcp_output_truncated",
   "error_message",
   "traceback"
  ],
@@ -177,6 +184,47 @@
    "label": "Output Truncated",
    "read_only": 1,
    "description": "Set when output_data exceeded the audit size limit and was clipped"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "mcp_metrics_section",
+   "fieldtype": "Section Break",
+   "label": "MCP Token Metrics"
+  },
+  {
+   "fieldname": "mcp_input_bytes",
+   "fieldtype": "Int",
+   "label": "MCP Input Bytes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mcp_output_bytes",
+   "fieldtype": "Int",
+   "label": "Original Output Bytes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mcp_transmitted_bytes",
+   "fieldtype": "Int",
+   "label": "Transmitted Output Bytes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mcp_metrics_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mcp_estimated_tokens",
+   "fieldtype": "Int",
+   "label": "Estimated MCP Tokens",
+   "read_only": 1,
+   "description": "Approximation for diagnostics. Provider usage data remains authoritative."
+  },
+  {
+   "fieldname": "mcp_output_truncated",
+   "fieldtype": "Check",
+   "label": "Client Output Compacted",
+   "read_only": 1
   },
   {
    "fieldname": "error_message",

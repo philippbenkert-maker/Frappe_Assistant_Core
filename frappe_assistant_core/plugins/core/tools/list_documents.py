@@ -291,7 +291,7 @@ class DocumentList(BaseTool):
                     "type": "integer",
                     "default": 20,
                     "maximum": 1000,
-                    "description": "Maximum number of records to return. Default is 20, maximum is 1000.",
+                    "description": "Maximum records requested. The site MCP row limit is enforced server-side.",
                 },
                 "order_by": {
                     "type": "string",
@@ -306,7 +306,13 @@ class DocumentList(BaseTool):
         doctype = arguments.get("doctype")
         filters = arguments.get("filters", {})
         fields = arguments.get("fields", ["name", "creation", "modified"])
-        limit = arguments.get("limit", 20)
+        from frappe_assistant_core.mcp.token_optimizer import get_optimization_config
+
+        configured_limit = get_optimization_config(frappe.session.user).max_list_rows
+        try:
+            limit = max(1, min(int(arguments.get("limit", 20)), configured_limit))
+        except (TypeError, ValueError):
+            limit = min(20, configured_limit)
         order_by = arguments.get("order_by", "creation desc")
 
         # Get current user context

@@ -65,6 +65,9 @@ class CorePlugin(BasePlugin):
             "generate_report",
             "report_list",
             "report_requirements",
+            # Token-efficient unified reporting + result continuation
+            "business_report",
+            "get_result_page",
             # Workflow tools
             "run_workflow",
             "get_pending_approvals",
