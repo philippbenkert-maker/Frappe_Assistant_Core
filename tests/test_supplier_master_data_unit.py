@@ -9,9 +9,17 @@ from unittest.mock import Mock
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1] / "frappe_assistant_core"
 IBAN = "CH9300762011623852957"  # Public format example, not a production account.
+QR_IBAN = "CH98 3000 5248 2100 1701 C"  # Public example from the ISO 20022 test cases.
+
+
+def make_qr_reference(prefix="12345678901234567890123456"):
+    carry = 0
+    lookup = (0, 9, 4, 6, 8, 2, 7, 1, 3, 5)
+    for digit in prefix:
+        carry = lookup[(carry + int(digit)) % 10]
+    return prefix + str((10 - carry) % 10)
 
 
 class Doc(SimpleNamespace):
@@ -73,13 +81,18 @@ def env(monkeypatch):
 
 
 def complete_supplier(env):
-    env.rows[("Supplier", "SUP-1")] = {"name": "SUP-1", "iban": IBAN}
+    env.rows[("Supplier", "SUP-1")] = {
+        "name": "SUP-1",
+        "iban": IBAN,
+        "default_payment_method": "IBAN",
+        "supplier_primary_address": "ADDR-1",
+    }
     env.rows[("Address", "ADDR-1")] = {
         "name": "ADDR-1", "address_line1": "Example 1", "city": "Example City", "country": "Switzerland",
         "pincode": "8000",
         "links": [{"link_doctype": "Supplier", "link_name": "SUP-1"}],
     }
-    return Doc(doctype="Purchase Invoice", supplier="SUP-1", supplier_address="ADDR-1")
+    return Doc(doctype="Purchase Invoice", supplier="SUP-1", supplier_address="ADDR-1", payment_type="IBAN")
 
 
 def test_historical_name_only_supplier_and_iban_in_remarks_are_incomplete(env):
@@ -136,8 +149,9 @@ def test_supplier_owned_bank_account_counts_without_supplier_iban(env):
 
 @pytest.mark.parametrize("change", [{"disabled": 1}, {"is_company_account": 1},
                                    {"party": "FOREIGN"}, {"party_type": "Customer"}])
-def test_invalid_default_bank_is_blocked_even_with_another_iban(env, change):
+def test_invalid_default_bank_is_blocked_when_it_is_the_payment_source(env, change):
     invoice = complete_supplier(env)
+    env.rows[("Supplier", "SUP-1")].pop("iban")
     env.rows[("Supplier", "SUP-1")]["default_bank_account"] = "BANK-1"
     env.rows[("Bank Account", "BANK-1")] = {
         "name": "BANK-1", "party_type": "Supplier", "party": "SUP-1", "iban": IBAN, **change,
@@ -173,9 +187,92 @@ def test_read_failures_are_unverifiable_not_missing_or_success(env, failure):
 def test_non_iban_payment_requires_manual_review_not_fabrication(env):
     invoice = complete_supplier(env)
     env.rows[("Supplier", "SUP-1")].pop("iban")
-    invoice.is_paid = 1
-    invoice.mode_of_payment = "Card"
+    invoice.payment_type = "SEPA"
     assert "supplier_payment_details_need_review" in env.review.review_supplier_master_data(invoice)["issues"]
+
+
+def test_esr_invoice_can_be_complete_without_an_invoice_iban(env):
+    invoice = complete_supplier(env)
+    env.rows[("Supplier", "SUP-1")].pop("iban")
+    env.rows[("Supplier", "SUP-1")]["default_payment_method"] = "ESR"
+    env.rows[("Supplier", "SUP-1")]["esr_participation_number"] = "010123456"
+    invoice.payment_type = "ESR"
+    invoice.esr_reference_number = "12345678901234567890"
+
+    result = env.review.review_supplier_master_data(invoice)
+
+    assert result["complete"] is True
+    assert "invoice_esr_reference_missing" not in result["issues"]
+    assert "supplier_esr_participant_missing" not in result["issues"]
+
+
+def test_esr_invoice_without_reference_is_blocked_even_when_supplier_has_iban(env):
+    invoice = complete_supplier(env)
+    invoice.payment_type = "ESR"
+    invoice.esr_reference_number = ""
+    env.rows[("Supplier", "SUP-1")]["default_payment_method"] = "ESR"
+    env.rows[("Supplier", "SUP-1")]["esr_participation_number"] = "010123456"
+
+    result = env.review.review_supplier_master_data(invoice)
+
+    assert "invoice_esr_reference_missing" in result["issues"]
+    assert env.review.intake_blocker(result)["created"] is False
+
+
+def test_qr_iban_requires_valid_qr_reference(env):
+    invoice = complete_supplier(env)
+    invoice.payment_type = "ESR"
+    invoice.iban = QR_IBAN
+    invoice.esr_reference_number = make_qr_reference()
+    env.rows[("Supplier", "SUP-1")]["esr_participation_number"] = "010123456"
+    env.utils.validate_iban.side_effect = None
+    env.utils.validate_iban.return_value = True
+
+    assert env.review.review_supplier_master_data(invoice)["complete"] is True
+
+    invoice.esr_reference_number = make_qr_reference()[:-1] + "0"
+    result = env.review.review_supplier_master_data(invoice)
+    assert "invoice_qr_reference_invalid" in result["issues"]
+
+
+def test_multiple_bank_accounts_without_default_are_not_chosen_arbitrarily(env):
+    invoice = complete_supplier(env)
+    env.rows[("Supplier", "SUP-1")].pop("iban")
+    for name in ("BANK-1", "BANK-2"):
+        env.rows[("Bank Account", name)] = {
+            "name": name, "party_type": "Supplier", "party": "SUP-1", "iban": IBAN,
+        }
+
+    result = env.review.review_supplier_master_data(invoice)
+
+    assert "supplier_bank_account_ambiguous" in result["issues"]
+    assert not result["complete"]
+
+
+def test_prepare_uses_verified_primary_address_and_supplier_payment_method(env):
+    complete_supplier(env)
+    invoice = Doc(doctype="Purchase Invoice", supplier="SUP-1")
+
+    env.review.prepare_purchase_invoice_defaults(invoice)
+
+    assert invoice.supplier_address == "ADDR-1"
+    assert invoice.payment_type == "IBAN"
+    assert env.review.review_supplier_master_data(invoice)["complete"] is True
+
+
+def test_prepare_does_not_guess_between_multiple_supplier_addresses(env):
+    invoice = complete_supplier(env)
+    invoice.supplier_address = None
+    env.rows[("Supplier", "SUP-1")].pop("supplier_primary_address")
+    env.rows[("Address", "ADDR-2")] = {
+        "name": "ADDR-2", "address_line1": "Example 2", "city": "Example City", "country": "Switzerland",
+        "pincode": "8000", "links": [{"link_doctype": "Supplier", "link_name": "SUP-1"}],
+    }
+
+    env.review.prepare_purchase_invoice_defaults(invoice)
+
+    assert invoice.supplier_address is None
+    assert "invoice_supplier_address_missing_or_invalid" in env.review.review_supplier_master_data(invoice)["issues"]
 
 
 def test_masked_bank_field_is_unverifiable_instead_of_invalid(env):
@@ -223,17 +320,35 @@ def test_create_and_submit_blocks_before_any_insert(env, validate_only):
     doc.submit.assert_not_called()
 
 
-def test_draft_intake_remains_possible_and_reports_open_work(env):
+def test_incomplete_draft_intake_is_blocked_before_insert(env):
     env.rows[("Supplier", "SUP-1")] = {"name": "SUP-1"}
     doc = document_harness(env, "Purchase Invoice")
     result = document_tool(env, "create_document", "DocumentCreate").execute(
         {"doctype": "Purchase Invoice", "data": {"supplier": "SUP-1"}}
     )
-    assert result["success"] is True
+    assert result["success"] is False
+    assert result["error_type"] == "supplier_master_data_incomplete"
+    assert result["created"] is False
     assert result["import_complete"] is False
     assert result["master_data_review"]["complete"] is False
-    doc.insert.assert_called_once()
+    doc.insert.assert_not_called()
     doc.submit.assert_not_called()
+
+
+def test_complete_draft_intake_is_saved_with_verified_defaults(env):
+    complete_supplier(env)
+    doc = document_harness(env, "Purchase Invoice")
+    result = document_tool(env, "create_document", "DocumentCreate").execute(
+        {"doctype": "Purchase Invoice", "data": {"supplier": "SUP-1"}}
+    )
+
+    assert result["success"] is True
+    assert result["master_data_review"]["complete"] is True
+    assert doc.supplier_address == "ADDR-1"
+    assert doc.payment_type == "IBAN"
+    assert result["defaults_applied"] == {"payment_type": "IBAN", "supplier_address": "ADDR-1"}
+    assert not getattr(doc, "iban", None)
+    doc.insert.assert_called_once()
 
 
 def test_supplier_is_a_real_master_record_not_a_submittable_draft(env):

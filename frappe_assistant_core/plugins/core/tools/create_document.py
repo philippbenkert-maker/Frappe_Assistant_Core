@@ -27,8 +27,9 @@ from frappe import _
 from frappe_assistant_core.core.base_tool import BaseTool
 from frappe_assistant_core.core.supplier_master_data import (
     add_master_data_review,
+    intake_blocker,
+    prepare_purchase_invoice_defaults,
     review_supplier_master_data,
-    submission_blocker,
 )
 
 
@@ -52,8 +53,10 @@ class DocumentCreate(BaseTool):
             " SUPPLIER INVOICES: Creating a Supplier does not complete invoice intake. "
             "Read the source payment section, create/link its Address and verify structured "
             "Supplier.iban or Bank Account data. Bank details in remarks do not count. "
-            "Check master_data_review in the response. Purchase Invoice submission is blocked "
-            "while supplier master data is incomplete or unverifiable; do not bypass the check."
+            "A Purchase Invoice draft is not saved unless its linked supplier address and "
+            "payment details required by its payment type are complete and verifiable. "
+            "ESR requires both the participant identifier and invoice reference. Check "
+            "master_data_review in the response; do not bypass the check."
         )
 
         self.inputSchema = {
@@ -198,12 +201,15 @@ class DocumentCreate(BaseTool):
 
             # Check before insert: failed create-and-submit must not leave a new draft behind.
             master_data_review = None
+            master_data_defaults = {}
             if doctype == "Purchase Invoice":
+                master_data_defaults = prepare_purchase_invoice_defaults(doc)
                 master_data_review = review_supplier_master_data(doc)
-                if submit or str(doc.get("docstatus")) == "1":
-                    blocked = submission_blocker(master_data_review)
-                    if blocked:
-                        return blocked
+                blocked = intake_blocker(master_data_review)
+                if blocked:
+                    if master_data_defaults:
+                        blocked["defaults_applied"] = master_data_defaults
+                    return blocked
 
             if validate_only:
                 # Run validation without saving
@@ -218,6 +224,7 @@ class DocumentCreate(BaseTool):
                         "fields_validated": list(data.keys()),
                         "child_tables": list(table_fields.keys()) if table_fields else [],
                         "next_step": "Use create_document with validate_only=false to actually create the document",
+                        "defaults_applied": master_data_defaults,
                     },
                     master_data_review,
                 )
@@ -268,6 +275,8 @@ class DocumentCreate(BaseTool):
                 "submitted": False,
                 "can_submit": False,
             }
+            if master_data_defaults:
+                result["defaults_applied"] = master_data_defaults
 
             # Submit if requested and allowed
             if submit and doc.docstatus == 0:

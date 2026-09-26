@@ -39,16 +39,22 @@ on the invoice. Store verified bank details in `Supplier.iban` (where available)
 or a supplier-owned Bank Account; an IBAN in `remarks` is not master data.
 
 Inspect `master_data_review` after Supplier or Purchase Invoice operations.
-`success=true` confirms the individual write, not a complete import. Supplier
-records are not submittable drafts. Missing data must be reported as open work.
-Read back the linked records before reporting completion. Never fabricate bank
-details, and never silently replace an existing account based on OCR.
+`success=true` confirms the individual write, not a complete source-document
+match. Supplier records are not submittable drafts. Missing data must be reported
+as open work. Read back the linked records before reporting completion. Never
+fabricate bank details, and never silently replace an existing account based on
+OCR.
 
-Purchase Invoice submission is blocked before insertion when the master-data
-review is incomplete or unverifiable. Save a draft for unresolved intake; cash,
-card, non-IBAN and changed-bank cases need manual review. Structural completeness
-does not authorize payment or prove that an account matches the source invoice.
-Do not route around a blocker using another tool.
+A new Purchase Invoice is blocked before insertion when its linked supplier
+address or payment details are incomplete or unverifiable, even when `submit`
+is false. A verified primary supplier address (or one uniquely linked complete
+address) and the supplier's declared payment method may be applied as defaults;
+the response lists `defaults_applied`. IBAN/SEPA requires a valid payment IBAN.
+ESR requires both a participant identifier and the invoice reference; a QR-IBAN
+also requires a valid QR reference. Cash, card, non-IBAN and changed-bank cases
+need manual review. Structural completeness does not authorize payment or prove
+that an account matches the source invoice. Do not route around a blocker using
+another tool.
 
 ### General document creation
 
