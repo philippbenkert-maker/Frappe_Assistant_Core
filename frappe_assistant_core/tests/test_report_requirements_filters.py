@@ -30,7 +30,7 @@ Also adds the Report.filters child table as a discovery source, and a
 discovery_diagnostics payload so empty results are debuggable.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import frappe
 
@@ -201,6 +201,44 @@ class TestERPNextSharedFilters(BaseAssistantTest):
         definitions = {item["fieldname"]: item for item in parsed["filters"]}
         self.assertEqual(definitions["filter_based_on"]["options"], ["Fiscal Year", "Date Range"])
         self.assertIn("Date Range", definitions["period_start_date"]["mandatory_depends_on"])
+
+    def test_constant_report_name_merges_shared_and_appended_filters(self):
+        report_js = """
+const PL_REPORT_NAME = "Profit and Loss Statement";
+frappe.query_reports[PL_REPORT_NAME] = $.extend({}, erpnext.financial_statements);
+frappe.query_reports[PL_REPORT_NAME]["filters"].push({
+    fieldname: "selected_view",
+    label: __("Selected View"),
+    fieldtype: "Select",
+    options: ["Report", "Growth"],
+    reqd: 1,
+});
+"""
+        shared_js = """
+erpnext.financial_statements = {
+    filters: [
+        {fieldname: "company", label: __("Company"), fieldtype: "Link", reqd: 1},
+        {fieldname: "periodicity", label: __("Periodicity"), fieldtype: "Select", reqd: 1},
+    ],
+};
+"""
+
+        with patch.object(
+            self.tool,
+            "_resolve_shared_js_path",
+            return_value="financial_statements.js",
+        ), patch("builtins.open", mock_open(read_data=shared_js)):
+            parsed, details = self.tool._parse_report_js(report_js, "Accounts")
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(
+            [filter_def["fieldname"] for filter_def in parsed["filters"]],
+            ["company", "periodicity", "selected_view"],
+        )
+        self.assertEqual(parsed["required_filters"], ["company", "periodicity", "selected_view"])
+        self.assertEqual(details["source"], "shared_js")
+        self.assertEqual(details["shared"]["reference"], "erpnext.financial_statements")
+        self.assertEqual(details["appended_filters_found"], 1)
 
 
 def _report_doc(**kwargs):
