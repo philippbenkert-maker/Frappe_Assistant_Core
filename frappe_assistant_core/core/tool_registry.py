@@ -277,13 +277,20 @@ class ToolRegistry:
                 if not name or not tools:
                     self.logger.warning(f"Ignoring incomplete assistant tool profile: {entry!r}")
                     continue
-                profiles[name] = {
+                profile = {
                     "name": name,
                     "description": str(entry.get("description") or "").strip(),
                     "tools": list(dict.fromkeys(tools)),
                     "default": bool(entry.get("default")),
                     "source_app": str(entry.get("source_app") or "").strip(),
                 }
+                try:
+                    max_description_chars = int(entry.get("max_description_chars") or 0)
+                except (TypeError, ValueError):
+                    max_description_chars = 0
+                if max_description_chars:
+                    profile["max_description_chars"] = max(80, min(max_description_chars, 2_000))
+                profiles[name] = profile
         except Exception as e:
             self.logger.warning(f"Failed to load assistant tool profiles: {e}")
 

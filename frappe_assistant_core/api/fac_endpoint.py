@@ -108,6 +108,7 @@ def _build_tool_registry(profile_name=None):
         # Apply the site/user MCP profile before adapting tools. Profiles only
         # narrow the permission-filtered registry; they never grant access.
         from frappe_assistant_core.mcp.token_optimizer import (
+            concise_description,
             get_optimization_config,
             select_tool_metadata,
         )
@@ -135,6 +136,11 @@ def _build_tool_registry(profile_name=None):
 
         for tool_name, tool_instance in available_tools.items():
             tool_dict = build_tool_dict(tool_instance)
+            if profile_name and profile.get("max_description_chars"):
+                tool_dict["description"] = concise_description(
+                    tool_dict["description"],
+                    profile["max_description_chars"],
+                )
             annotations = category_to_annotations(categories.get(tool_name, "read_write"))
             if annotations:
                 # Merge with any annotations the tool already declared.
