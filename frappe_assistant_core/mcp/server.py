@@ -359,6 +359,13 @@ class MCPServer:
             if optimization_config.enabled and optimization_config.concise_descriptions:
                 description = concise_description(description, optimization_config.max_description_chars)
 
+            # An explicit hook profile is a stricter transport contract than
+            # the site-wide optimizer. Apply it last because skill ``replace``
+            # mode may have substituted a longer description above.
+            profile_description_limit = tool.get("_max_description_chars")
+            if profile_description_limit:
+                description = concise_description(description, profile_description_limit)
+
             tool_spec = {
                 "name": tool["name"],
                 "description": description,
