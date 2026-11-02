@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import frappe
 from frappe import _
+from frappe.utils import strip_html_tags
 
 # Substrings that always indicate a credential. Matched case-insensitively
 # anywhere in the key name.
@@ -63,6 +64,33 @@ def _is_sensitive_key(key: Any) -> bool:
     if any(s in lower for s in _ALWAYS_SENSITIVE):
         return True
     return bool(_SENSITIVE_TOKEN_RE.search(lower))
+
+
+def exception_message(exc: BaseException, fallback: Optional[str] = None) -> str:
+    """Return a non-empty, plain-text description for tool errors.
+
+    Frappe can raise a message-less PermissionError while keeping the actual
+    reason as HTML in frappe.flags.error_message. Returning only str(exc)
+    makes an MCP write look unexplained and causes wasteful retries.
+    """
+    raw_message = str(exc) or str(frappe.flags.get("error_message") or "")
+    message = " ".join(strip_html_tags(raw_message).split())
+    return message or fallback or type(exc).__name__
+
+
+def permission_error_result(doctype: str, error: str, name: Optional[str] = None) -> Dict[str, Any]:
+    """Return one actionable result shape for document permission denials."""
+    result: Dict[str, Any] = {
+        "success": False,
+        "error": error,
+        "error_type": "permission_error",
+        "doctype": doctype,
+        "guidance": _("Insufficient permissions for this operation."),
+        "suggestion": _("Contact your system administrator to grant necessary permissions for this DocType"),
+    }
+    if name:
+        result["name"] = name
+    return result
 
 
 class BaseTool(ABC):
@@ -227,16 +255,17 @@ class BaseTool(ABC):
 
         except frappe.PermissionError as e:
             execution_time = time.time() - start_time
+            error_msg = exception_message(e)
             response = {
                 "success": False,
-                "error": str(e),
+                "error": error_msg,
                 "error_type": "PermissionError",
                 "execution_time": execution_time,
             }
 
             self.log_execution(arguments, response, execution_time, status="Permission Denied")
 
-            frappe.log_error(title=_("Permission Error"), message=f"{self.name}: {str(e)}")
+            frappe.log_error(title=_("Permission Error"), message=f"{self.name}: {error_msg}")
 
             return response
 

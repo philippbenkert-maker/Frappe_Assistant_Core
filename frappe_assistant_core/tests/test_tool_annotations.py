@@ -259,7 +259,7 @@ class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
         self.assertEqual(list(built), [tool.name])
         registry.get_available_tool_instances.assert_called_once_with(
             user=frappe.session.user,
-            tool_names=[tool.name],
+            tool_names=[tool.name, "get_result_page"],
         )
 
     def test_unknown_profile_fails_closed(self):

@@ -79,6 +79,34 @@ class TestDocumentTools(BaseAssistantTest):
             # Tool execution should not raise unhandled exceptions
             self.fail(f"Tool execution raised exception: {str(e)}")
 
+    def test_personal_todo_defaults_to_current_user_only_when_required(self):
+        from frappe_assistant_core.plugins.core.tools.create_document import (
+            _default_todo_allocation,
+        )
+
+        doc = MagicMock(doctype="ToDo", allocated_to=None, assigned_by=None)
+        doc.has_permission.return_value = False
+
+        with patch(
+            "frappe_assistant_core.plugins.core.tools.create_document.frappe.session.user",
+            "operator@example.com",
+        ):
+            _default_todo_allocation(doc)
+
+        self.assertEqual(doc.allocated_to, "operator@example.com")
+        doc.has_permission.assert_called_once_with("create")
+
+    def test_todo_allocation_preserves_an_explicit_assignee(self):
+        from frappe_assistant_core.plugins.core.tools.create_document import (
+            _default_todo_allocation,
+        )
+
+        doc = MagicMock(doctype="ToDo", allocated_to="owner@example.com", assigned_by=None)
+        _default_todo_allocation(doc)
+
+        self.assertEqual(doc.allocated_to, "owner@example.com")
+        doc.has_permission.assert_not_called()
+
     def test_get_document_basic(self):
         """Test basic document retrieval"""
         if not self.registry.has_tool("get_document"):

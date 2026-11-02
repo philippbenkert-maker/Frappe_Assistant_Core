@@ -24,13 +24,25 @@ from typing import Any, Dict
 import frappe
 from frappe import _
 
-from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.base_tool import (
+    BaseTool,
+    exception_message,
+    permission_error_result,
+)
 from frappe_assistant_core.core.supplier_master_data import (
     add_master_data_review,
     intake_blocker,
     prepare_purchase_invoice_defaults,
     review_supplier_master_data,
 )
+
+
+def _default_todo_allocation(doc: Any) -> None:
+    """Keep a plain ToDo useful for a non-admin without widening permissions."""
+    if doc.doctype != "ToDo" or doc.allocated_to or doc.assigned_by:
+        return
+    if not doc.has_permission("create"):
+        doc.allocated_to = frappe.session.user
 
 
 class DocumentCreate(BaseTool):
@@ -191,6 +203,8 @@ class DocumentCreate(BaseTool):
                     # Handle regular fields
                     setattr(doc, field, value)
 
+            _default_todo_allocation(doc)
+
             # Required-field checks are deferred to Frappe's own validation pipeline
             # via doc.insert()/doc.run_method("validate"). A pre-flight check here is
             # unreliable: many "reqd" fields (e.g. Quotation.conversion_rate,
@@ -212,6 +226,10 @@ class DocumentCreate(BaseTool):
                     return blocked
 
             if validate_only:
+                # Match the permission decision made by insert(), so validation
+                # cannot promise a create that the same user may not perform.
+                doc.check_permission("create")
+
                 # Run validation without saving
                 doc.run_method("validate")
 
@@ -286,8 +304,11 @@ class DocumentCreate(BaseTool):
                     result["docstatus"] = 1
                     result["message"] = f"{doctype} '{doc.name}' created and submitted successfully"
                 except Exception as e:
-                    result["message"] = f"{doctype} '{doc.name}' created as draft. Submit failed: {str(e)}"
-                    result["submit_error"] = str(e)
+                    submit_error = exception_message(e)
+                    result["message"] = (
+                        f"{doctype} '{doc.name}' created as draft. Submit failed: {submit_error}"
+                    )
+                    result["submit_error"] = submit_error
             else:
                 result["message"] = f"{doctype} '{doc.name}' created successfully as draft"
 
@@ -362,12 +383,18 @@ class DocumentCreate(BaseTool):
                     else f"Use get_doctype_info tool with doctype='{doctype}' to see all required fields."
                 ),
             }
-        except Exception as e:
+        except frappe.PermissionError as e:
+            error_msg = exception_message(e, _("Insufficient permission to create {0}").format(doctype))
             frappe.log_error(
-                title=_("Document Creation Error"), message=f"Error creating {doctype}: {str(e)}"
+                title=_("Document Creation Error"), message=f"Error creating {doctype}: {error_msg}"
             )
 
-            error_msg = str(e)
+            return permission_error_result(doctype, error_msg)
+        except Exception as e:
+            error_msg = exception_message(e)
+            frappe.log_error(
+                title=_("Document Creation Error"), message=f"Error creating {doctype}: {error_msg}"
+            )
 
             # Provide specific guidance based on error type
             result = {"success": False, "error": error_msg, "doctype": doctype}
@@ -391,13 +418,7 @@ class DocumentCreate(BaseTool):
                     }
                 )
             elif "permission" in error_msg.lower():
-                result.update(
-                    {
-                        "error_type": "permission_error",
-                        "guidance": "Insufficient permissions for this operation.",
-                        "suggestion": "Contact your system administrator to grant necessary permissions for this DocType",
-                    }
-                )
+                return permission_error_result(doctype, error_msg)
             else:
                 result.update(
                     {

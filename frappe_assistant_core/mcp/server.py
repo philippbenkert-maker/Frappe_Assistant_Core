@@ -293,9 +293,12 @@ class MCPServer:
         Handle initialize request.
 
         Declares server capabilities according to MCP 2025-06-18 spec.
-        We only support tools (not prompts, resources, or sampling).
+        The server exposes tools, database-driven prompts, and deployable
+        skill resources. Sampling remains client-side.
         """
         import frappe
+
+        from frappe_assistant_core import __version__
 
         # Get protocol version from settings
         protocol_version = "2025-06-18"  # Default
@@ -308,11 +311,14 @@ class MCPServer:
         return {
             "protocolVersion": protocol_version,
             "capabilities": {
-                "tools": {},  # We support tools
+                # Tool profiles and installed KT apps can change at deploy or
+                # migrate time. Advertising listChanged prevents clients from
+                # treating a stale discovery snapshot as a permanent contract.
+                "tools": {"listChanged": True},
                 "prompts": {},  # We support prompts (database-driven templates)
-                "resources": {},  # We support resources (skill documents)
+                "resources": {"listChanged": True},  # Skills are deployable resources
             },
-            "serverInfo": {"name": self.name, "version": "2.0.0"},
+            "serverInfo": {"name": self.name, "version": __version__},
         }
 
     def _handle_tools_list(self, params: Dict, tool_registry: Optional[Dict] = None) -> Dict:
