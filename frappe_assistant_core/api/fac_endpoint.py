@@ -137,6 +137,12 @@ def _build_tool_registry(profile_name=None):
         for tool_name, tool_instance in available_tools.items():
             tool_dict = build_tool_dict(tool_instance)
             if profile_name and profile.get("max_description_chars"):
+                # Carry the explicit hook-profile budget to the final
+                # tools/list serializer. In skill ``replace`` mode the MCP
+                # server substitutes the description after this adapter step,
+                # so only truncating here would let that replacement bypass
+                # the profile contract.
+                tool_dict["_max_description_chars"] = profile["max_description_chars"]
                 tool_dict["description"] = concise_description(
                     tool_dict["description"],
                     profile["max_description_chars"],

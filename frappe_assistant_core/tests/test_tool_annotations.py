@@ -159,6 +159,50 @@ class TestToolsListEmitsAnnotations(BaseAssistantTest):
             {"readOnlyHint": False, "destructiveHint": True},
         )
 
+    def test_profile_description_limit_applies_after_skill_replacement(self):
+        from types import SimpleNamespace
+
+        from frappe_assistant_core.mcp.server import MCPServer
+        from frappe_assistant_core.mcp.token_optimizer import MCPOptimizationConfig
+
+        server = MCPServer("test")
+        tool_registry = OrderedDict(
+            {
+                "profiled_tool": {
+                    "name": "profiled_tool",
+                    "description": "Short original description.",
+                    "inputSchema": {"type": "object", "properties": {}},
+                    "_max_description_chars": 80,
+                    "fn": lambda **kw: {},
+                }
+            }
+        )
+        skill_manager = MagicMock()
+        skill_manager.get_tool_skill_map.return_value = {
+            "profiled_tool": {
+                "description": "A much longer replacement description " * 10,
+                "skill_id": "profiled-skill",
+            }
+        }
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("frappe.get_single", return_value=SimpleNamespace(skill_mode="replace")))
+            stack.enter_context(
+                patch(
+                    "frappe_assistant_core.mcp.token_optimizer.get_optimization_config",
+                    return_value=MCPOptimizationConfig(max_description_chars=280),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "frappe_assistant_core.api.handlers.resources.get_skill_manager",
+                    return_value=skill_manager,
+                )
+            )
+            result = server._handle_tools_list({}, tool_registry)
+
+        self.assertLessEqual(len(result["tools"][0]["description"]), 80)
+
 
 class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
     """End-to-end: tools built for a request carry category-derived annotations
@@ -260,6 +304,7 @@ class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
 
         self.assertEqual(list(built), [tool.name])
         self.assertLessEqual(len(built[tool.name]["description"]), 80)
+        self.assertEqual(built[tool.name]["_max_description_chars"], 80)
         registry.get_available_tool_instances.assert_called_once_with(
             user=frappe.session.user,
             tool_names=[tool.name, "get_result_page"],
