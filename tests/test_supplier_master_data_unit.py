@@ -44,6 +44,7 @@ def env(monkeypatch):
     frappe.session = SimpleNamespace(user="test@example.invalid")
     frappe._ = lambda text: text
     frappe.MandatoryError = type("MandatoryError", (Exception,), {})
+    frappe.PermissionError = type("PermissionError", (Exception,), {})
     frappe.has_permission = Mock(return_value=True)
     frappe.db = SimpleNamespace(exists=Mock(return_value=True))
     frappe.log_error = Mock()
@@ -55,8 +56,10 @@ def env(monkeypatch):
         assert kwargs["limit_page_length"] == 101
         filters = kwargs["filters"]
         if dt == "Address":
-            assert filters == [["Dynamic Link", "link_doctype", "=", "Supplier"],
-                               ["Dynamic Link", "link_name", "=", "SUP-1"]]
+            assert filters == [
+                ["Dynamic Link", "link_doctype", "=", "Supplier"],
+                ["Dynamic Link", "link_name", "=", "SUP-1"],
+            ]
         else:
             assert filters == {"party_type": "Supplier", "party": "SUP-1"}
         return [{"name": name} for kind, name in rows if kind == dt]
@@ -71,13 +74,27 @@ def env(monkeypatch):
     utils.validate_iban = Mock(side_effect=lambda value: value.replace(" ", "") == IBAN)
     base = ModuleType("frappe_assistant_core.core.base_tool")
     base.BaseTool = type("BaseTool", (), {})
-    for name, module in [("frappe", frappe), ("frappe.utils", utils),
-                         (security.__name__, security), (base.__name__, base)]:
+    base.exception_message = lambda exc, fallback=None: str(exc) or fallback or type(exc).__name__
+    base.permission_error_result = lambda doctype, error, name=None: {
+        "success": False,
+        "error": error,
+        "error_type": "permission_error",
+        "doctype": doctype,
+        **({"name": name} if name else {}),
+    }
+    for name, module in [
+        ("frappe", frappe),
+        ("frappe.utils", utils),
+        (security.__name__, security),
+        (base.__name__, base),
+    ]:
         monkeypatch.setitem(sys.modules, name, module)
-    review = load_module(monkeypatch, "frappe_assistant_core.core.supplier_master_data",
-                         "core/supplier_master_data.py")
-    return SimpleNamespace(frappe=frappe, security=security, utils=utils,
-                           rows=rows, review=review, monkeypatch=monkeypatch)
+    review = load_module(
+        monkeypatch, "frappe_assistant_core.core.supplier_master_data", "core/supplier_master_data.py"
+    )
+    return SimpleNamespace(
+        frappe=frappe, security=security, utils=utils, rows=rows, review=review, monkeypatch=monkeypatch
+    )
 
 
 def complete_supplier(env):
@@ -88,7 +105,10 @@ def complete_supplier(env):
         "supplier_primary_address": "ADDR-1",
     }
     env.rows[("Address", "ADDR-1")] = {
-        "name": "ADDR-1", "address_line1": "Example 1", "city": "Example City", "country": "Switzerland",
+        "name": "ADDR-1",
+        "address_line1": "Example 1",
+        "city": "Example City",
+        "country": "Switzerland",
         "pincode": "8000",
         "links": [{"link_doctype": "Supplier", "link_name": "SUP-1"}],
     }
@@ -118,11 +138,18 @@ def test_linked_address_counts_without_primary_shortcut(env):
     env.utils.validate_iban.assert_called_once_with(IBAN)
 
 
-@pytest.mark.parametrize("change", [
-    {"address_line1": " "}, {"city": ""}, {"country": None}, {"pincode": ""}, {"disabled": 1},
-    {"links": [{"link_doctype": "Customer", "link_name": "SUP-1"}]},
-    {"links": [{"link_doctype": "Supplier", "link_name": "SOMEONE-ELSE"}]},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"address_line1": " "},
+        {"city": ""},
+        {"country": None},
+        {"pincode": ""},
+        {"disabled": 1},
+        {"links": [{"link_doctype": "Customer", "link_name": "SUP-1"}]},
+        {"links": [{"link_doctype": "Supplier", "link_name": "SOMEONE-ELSE"}]},
+    ],
+)
 def test_incomplete_disabled_or_foreign_address_never_passes(env, change):
     invoice = complete_supplier(env)
     env.rows[("Address", "ADDR-1")].update(change)
@@ -142,19 +169,27 @@ def test_supplier_owned_bank_account_counts_without_supplier_iban(env):
     invoice = complete_supplier(env)
     env.rows[("Supplier", "SUP-1")].pop("iban")
     env.rows[("Bank Account", "BANK-1")] = {
-        "name": "BANK-1", "party_type": "Supplier", "party": "SUP-1", "iban": IBAN,
+        "name": "BANK-1",
+        "party_type": "Supplier",
+        "party": "SUP-1",
+        "iban": IBAN,
     }
     assert env.review.review_supplier_master_data(invoice)["complete"]
 
 
-@pytest.mark.parametrize("change", [{"disabled": 1}, {"is_company_account": 1},
-                                   {"party": "FOREIGN"}, {"party_type": "Customer"}])
+@pytest.mark.parametrize(
+    "change", [{"disabled": 1}, {"is_company_account": 1}, {"party": "FOREIGN"}, {"party_type": "Customer"}]
+)
 def test_invalid_default_bank_is_blocked_when_it_is_the_payment_source(env, change):
     invoice = complete_supplier(env)
     env.rows[("Supplier", "SUP-1")].pop("iban")
     env.rows[("Supplier", "SUP-1")]["default_bank_account"] = "BANK-1"
     env.rows[("Bank Account", "BANK-1")] = {
-        "name": "BANK-1", "party_type": "Supplier", "party": "SUP-1", "iban": IBAN, **change,
+        "name": "BANK-1",
+        "party_type": "Supplier",
+        "party": "SUP-1",
+        "iban": IBAN,
+        **change,
     }
     result = env.review.review_supplier_master_data(invoice)
     assert "supplier_default_bank_invalid" in result["issues"]
@@ -240,7 +275,10 @@ def test_multiple_bank_accounts_without_default_are_not_chosen_arbitrarily(env):
     env.rows[("Supplier", "SUP-1")].pop("iban")
     for name in ("BANK-1", "BANK-2"):
         env.rows[("Bank Account", name)] = {
-            "name": name, "party_type": "Supplier", "party": "SUP-1", "iban": IBAN,
+            "name": name,
+            "party_type": "Supplier",
+            "party": "SUP-1",
+            "iban": IBAN,
         }
 
     result = env.review.review_supplier_master_data(invoice)
@@ -265,14 +303,21 @@ def test_prepare_does_not_guess_between_multiple_supplier_addresses(env):
     invoice.supplier_address = None
     env.rows[("Supplier", "SUP-1")].pop("supplier_primary_address")
     env.rows[("Address", "ADDR-2")] = {
-        "name": "ADDR-2", "address_line1": "Example 2", "city": "Example City", "country": "Switzerland",
-        "pincode": "8000", "links": [{"link_doctype": "Supplier", "link_name": "SUP-1"}],
+        "name": "ADDR-2",
+        "address_line1": "Example 2",
+        "city": "Example City",
+        "country": "Switzerland",
+        "pincode": "8000",
+        "links": [{"link_doctype": "Supplier", "link_name": "SUP-1"}],
     }
 
     env.review.prepare_purchase_invoice_defaults(invoice)
 
     assert invoice.supplier_address is None
-    assert "invoice_supplier_address_missing_or_invalid" in env.review.review_supplier_master_data(invoice)["issues"]
+    assert (
+        "invoice_supplier_address_missing_or_invalid"
+        in env.review.review_supplier_master_data(invoice)["issues"]
+    )
 
 
 def test_masked_bank_field_is_unverifiable_instead_of_invalid(env):
@@ -288,13 +333,22 @@ def test_missing_supplier_has_actionable_next_step(env):
 
 
 def document_harness(env, doctype):
-    doc = Doc(doctype=doctype, name="SUP-1" if doctype == "Supplier" else "INV-1", docstatus=0,
-              owner="test", creation="2026-01-01", modified="2026-01-01", modified_by="test")
+    doc = Doc(
+        doctype=doctype,
+        name="SUP-1" if doctype == "Supplier" else "INV-1",
+        docstatus=0,
+        owner="test",
+        creation="2026-01-01",
+        modified="2026-01-01",
+        modified_by="test",
+    )
     doc.insert = Mock()
     doc.submit = Mock(side_effect=lambda: setattr(doc, "docstatus", 1))
     doc.save = Mock()
     doc.reload = Mock()
     doc.run_method = Mock()
+    doc.has_permission = Mock(return_value=True)
+    doc.check_permission = Mock()
     env.frappe.new_doc = Mock(return_value=doc)
     reader = env.frappe.get_doc.side_effect
     env.frappe.get_doc.side_effect = lambda dt, name: doc if dt == "Purchase Invoice" else reader(dt, name)
@@ -302,8 +356,9 @@ def document_harness(env, doctype):
 
 
 def document_tool(env, filename, classname):
-    module = load_module(env.monkeypatch, "supplier_test_" + filename,
-                         "plugins/core/tools/" + filename + ".py")
+    module = load_module(
+        env.monkeypatch, "supplier_test_" + filename, "plugins/core/tools/" + filename + ".py"
+    )
     return getattr(module, classname)()
 
 
@@ -312,8 +367,14 @@ def test_create_and_submit_blocks_before_any_insert(env, validate_only):
     env.rows[("Supplier", "SUP-1")] = {"name": "SUP-1"}
     doc = document_harness(env, "Purchase Invoice")
     tool = document_tool(env, "create_document", "DocumentCreate")
-    result = tool.execute({"doctype": "Purchase Invoice", "submit": True, "validate_only": validate_only,
-                           "data": {"supplier": "SUP-1", "remarks": IBAN}})
+    result = tool.execute(
+        {
+            "doctype": "Purchase Invoice",
+            "submit": True,
+            "validate_only": validate_only,
+            "data": {"supplier": "SUP-1", "remarks": IBAN},
+        }
+    )
     assert result["success"] is False
     assert result["submitted"] is False
     doc.insert.assert_not_called()
@@ -390,10 +451,13 @@ def test_alternate_submission_routes_cannot_skip_incomplete_master_check(env, ro
 def test_complete_master_allows_authorized_create_submit(env):
     complete_supplier(env)
     doc = document_harness(env, "Purchase Invoice")
-    result = document_tool(env, "create_document", "DocumentCreate").execute({
-        "doctype": "Purchase Invoice", "submit": True,
-        "data": {"supplier": "SUP-1", "supplier_address": "ADDR-1"},
-    })
+    result = document_tool(env, "create_document", "DocumentCreate").execute(
+        {
+            "doctype": "Purchase Invoice",
+            "submit": True,
+            "data": {"supplier": "SUP-1", "supplier_address": "ADDR-1"},
+        }
+    )
     assert result["success"] is True
     assert result["submitted"] is True
     assert result["master_data_review"]["payment_authorized"] is False
