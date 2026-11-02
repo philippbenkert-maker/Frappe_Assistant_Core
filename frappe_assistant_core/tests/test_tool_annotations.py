@@ -237,7 +237,9 @@ class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
         registry.get_tool_profile.return_value = {
             "name": "compact",
             "tools": [tool.name],
+            "max_description_chars": 80,
         }
+        tool.description = "Profiled registry test " * 10
         registry.get_available_tool_instances.return_value = {tool.name: tool}
 
         with ExitStack() as stack:
@@ -257,6 +259,7 @@ class TestBuildToolRegistryAttachesAnnotations(BaseAssistantTest):
             built = fac_endpoint._build_tool_registry(profile_name="compact")
 
         self.assertEqual(list(built), [tool.name])
+        self.assertLessEqual(len(built[tool.name]["description"]), 80)
         registry.get_available_tool_instances.assert_called_once_with(
             user=frappe.session.user,
             tool_names=[tool.name, "get_result_page"],
@@ -289,6 +292,7 @@ class TestToolProfiles(BaseAssistantTest):
                 "tools": ["read_a", "read_a", "read_b"],
                 "default": True,
                 "source_app": "service_management",
+                "max_description_chars": 100,
             },
             {"name": "", "tools": ["ignored"]},
         ]
@@ -297,6 +301,7 @@ class TestToolProfiles(BaseAssistantTest):
             second = registry.get_tool_profiles()
 
         self.assertEqual(first["kt-compact"]["tools"], ["read_a", "read_b"])
+        self.assertEqual(first["kt-compact"]["max_description_chars"], 100)
         self.assertEqual(registry.get_default_tool_profile_name(), "kt-compact")
         self.assertEqual(second, first)
         get_hooks.assert_called_once_with("assistant_tool_profiles")
