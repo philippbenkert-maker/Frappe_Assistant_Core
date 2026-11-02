@@ -39,7 +39,7 @@ from frappe_assistant_core.core.supplier_master_data import (
 
 def _default_todo_allocation(doc: Any) -> None:
     """Keep a plain ToDo useful for a non-admin without widening permissions."""
-    if doc.doctype != "ToDo" or doc.allocated_to or doc.assigned_by:
+    if doc.doctype != "ToDo" or getattr(doc, "allocated_to", None) or getattr(doc, "assigned_by", None):
         return
     if not doc.has_permission("create"):
         doc.allocated_to = frappe.session.user
