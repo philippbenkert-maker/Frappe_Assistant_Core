@@ -24,7 +24,11 @@ from typing import Any, Dict
 import frappe
 from frappe import _
 
-from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.base_tool import (
+    BaseTool,
+    exception_message,
+    permission_error_result,
+)
 
 
 class DocumentDelete(BaseTool):
@@ -134,15 +138,19 @@ class DocumentDelete(BaseTool):
                     "dependency_error": True,
                 }
             except frappe.PermissionError as perm_error:
-                return {
-                    "success": False,
-                    "error": f"Insufficient permissions to delete {doctype} '{name}': {str(perm_error) or 'Permission denied'}",
-                    "doctype": doctype,
-                    "name": name,
-                    "permission_error": True,
-                }
+                reason = exception_message(perm_error, _("Permission denied"))
+                result = permission_error_result(
+                    doctype,
+                    f"Insufficient permissions to delete {doctype} '{name}': {reason}",
+                    name,
+                )
+                result["permission_error"] = True
+                return result
             except Exception as delete_error:
-                error_msg = str(delete_error) or f"Unknown error occurred while deleting {doctype} '{name}'"
+                error_msg = exception_message(
+                    delete_error,
+                    f"Unknown error occurred while deleting {doctype} '{name}'",
+                )
                 return {
                     "success": False,
                     "error": error_msg,
@@ -152,8 +160,9 @@ class DocumentDelete(BaseTool):
                 }
 
         except Exception as e:
-            error_msg = (
-                str(e) or f"Unexpected error occurred while processing delete request for {doctype} '{name}'"
+            error_msg = exception_message(
+                e,
+                f"Unexpected error occurred while processing delete request for {doctype} '{name}'",
             )
 
             frappe.log_error(

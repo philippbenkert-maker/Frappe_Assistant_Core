@@ -90,7 +90,12 @@ def _build_tool_registry(profile_name=None):
                     f"Unknown MCP tool profile '{profile_name}'; exposing no tools for this request"
                 )
                 return registry_dict
-            selected_tools = profile.get("tools") or []
+            selected_tools = list(profile.get("tools") or [])
+            # Every tool can return a centrally compacted result. Keep its
+            # user-bound continuation reader reachable even when an external
+            # hook profile forgot to list it explicitly.
+            if "get_result_page" not in selected_tools:
+                selected_tools.append("get_result_page")
 
         if selected_tools is None:
             available_tools = registry.get_available_tool_instances(user=frappe.session.user)

@@ -119,6 +119,24 @@ class TestAuditLogStatusClassification(BaseAssistantTest):
         self.assertEqual(row["status"], "Permission Denied")
         self.assertEqual(row["error_type"], "PermissionError")
 
+    def test_empty_permission_error_uses_plain_text_frappe_reason(self):
+        previous_message = frappe.flags.get("error_message")
+
+        def executor(arguments):
+            frappe.flags.error_message = "<strong>No create access</strong>"
+            raise frappe.PermissionError()
+
+        try:
+            response = _ToolBase(executor=executor)._safe_execute({})
+        finally:
+            if previous_message is None:
+                frappe.flags.pop("error_message", None)
+            else:
+                frappe.flags.error_message = previous_message
+
+        self.assertEqual(response["error"], "No create access")
+        self.assertNotIn("<", response["error"])
+
     def test_uncaught_exception_logs_error_with_traceback(self):
         def executor(arguments):
             raise RuntimeError("boom")

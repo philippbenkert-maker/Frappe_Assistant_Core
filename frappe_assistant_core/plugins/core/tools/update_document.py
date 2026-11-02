@@ -24,7 +24,11 @@ from typing import Any, Dict, List, Optional, Set
 import frappe
 from frappe import _
 
-from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.base_tool import (
+    BaseTool,
+    exception_message,
+    permission_error_result,
+)
 from frappe_assistant_core.core.supplier_master_data import (
     add_master_data_review,
     review_supplier_master_data,
@@ -407,12 +411,24 @@ class DocumentUpdate(BaseTool):
                 result["next_steps"] = []
             return add_master_data_review(result, master_data_review)
 
-        except Exception as e:
+        except frappe.PermissionError as e:
+            error_msg = exception_message(
+                e, _("Insufficient permission to update {0} '{1}'").format(doctype, name)
+            )
             frappe.log_error(
-                title=_("Document Update Error"), message=f"Error updating {doctype} '{name}': {str(e)}"
+                title=_("Document Update Error"),
+                message=f"Error updating {doctype} '{name}': {error_msg}",
             )
 
-            result = {"success": False, "error": str(e), "doctype": doctype, "name": name}
+            return permission_error_result(doctype, error_msg, name)
+        except Exception as e:
+            error_msg = exception_message(e)
+            frappe.log_error(
+                title=_("Document Update Error"),
+                message=f"Error updating {doctype} '{name}': {error_msg}",
+            )
+
+            result = {"success": False, "error": error_msg, "doctype": doctype, "name": name}
 
             # Log failed update
             return result

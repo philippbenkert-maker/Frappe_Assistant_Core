@@ -24,7 +24,11 @@ from typing import Any, Dict
 import frappe
 from frappe import _
 
-from frappe_assistant_core.core.base_tool import BaseTool
+from frappe_assistant_core.core.base_tool import (
+    BaseTool,
+    exception_message,
+    permission_error_result,
+)
 from frappe_assistant_core.core.supplier_master_data import (
     add_master_data_review,
     review_supplier_master_data,
@@ -167,14 +171,26 @@ class DocumentSubmit(BaseTool):
             # Log successful submission
             return add_master_data_review(result, master_data_review)
 
-        except Exception as e:
+        except frappe.PermissionError as e:
+            error_msg = exception_message(
+                e, _("Insufficient permission to submit {0} '{1}'").format(doctype, name)
+            )
             frappe.log_error(
-                title=_("Document Submit Error"), message=f"Error submitting {doctype} '{name}': {str(e)}"
+                title=_("Document Submit Error"),
+                message=f"Error submitting {doctype} '{name}': {error_msg}",
+            )
+
+            return permission_error_result(doctype, error_msg, name)
+        except Exception as e:
+            error_msg = exception_message(e)
+            frappe.log_error(
+                title=_("Document Submit Error"),
+                message=f"Error submitting {doctype} '{name}': {error_msg}",
             )
 
             result = {
                 "success": False,
-                "error": str(e),
+                "error": error_msg,
                 "doctype": doctype,
                 "name": name,
                 "suggestion": "Check if the document has all required fields filled and passes validation.",
