@@ -96,6 +96,31 @@ class TestDocumentTools(BaseAssistantTest):
         self.assertEqual(doc.allocated_to, "operator@example.com")
         doc.has_permission.assert_called_once_with("create")
 
+
+    def test_validate_new_document_supplies_insert_lifecycle_action(self):
+        from frappe_assistant_core.plugins.core.tools.create_document import (
+            _validate_new_document,
+        )
+
+        events = []
+        doc = MagicMock()
+        doc.flags = MagicMock(in_insert=False)
+        doc._action = None
+        doc.check_permission.side_effect = lambda permission: events.append(("permission", permission))
+        doc.run_method.side_effect = lambda method: events.append(("method", method, doc._action))
+        doc.run_before_save_methods.side_effect = lambda: events.append(("before_save", doc._action))
+        doc._validate.side_effect = lambda: events.append(("validate", doc._action))
+
+        _validate_new_document(doc)
+
+        self.assertEqual(doc._action, "save")
+        self.assertFalse(doc.flags.in_insert)
+        self.assertIn(("before_save", "save"), events)
+        self.assertIn(("validate", "save"), events)
+        doc.run_method.assert_not_called()
+        doc.set_new_name.assert_not_called()
+        doc.insert.assert_not_called()
+
     def test_todo_allocation_preserves_an_explicit_assignee(self):
         from frappe_assistant_core.plugins.core.tools.create_document import (
             _default_todo_allocation,

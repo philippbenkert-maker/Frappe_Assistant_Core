@@ -45,6 +45,33 @@ def _default_todo_allocation(doc: Any) -> None:
         doc.allocated_to = frappe.session.user
 
 
+def _validate_new_document(doc: Any) -> None:
+    """Run Frappe's save-validation stage without inserting the document.
+
+    Calling a controller's ``validate`` method directly omits ``_action``,
+    ``before_validate`` and Frappe's own field/link validation. Some ERPNext
+    controllers, including Purchase Receipt, require that state. This mirrors
+    the validation phase of ``Document.insert`` and deliberately avoids naming,
+    ``before_insert``, database writes and post-insert hooks.
+    """
+    doc.check_permission("create")
+    doc.set("__islocal", True)
+    doc._action = "save"
+    doc._set_defaults()
+    doc.set_user_and_timestamp()
+    doc.set_docstatus()
+    doc._validate_links()
+    doc.set_parent_in_children()
+    doc.validate_higher_perm_levels()
+    doc.flags.in_insert = True
+    try:
+        doc.run_before_save_methods()
+        doc._validate()
+        doc.set_docstatus()
+    finally:
+        doc.flags.in_insert = False
+
+
 class DocumentCreate(BaseTool):
     """
     Tool for creating new Frappe documents.
@@ -226,12 +253,7 @@ class DocumentCreate(BaseTool):
                     return blocked
 
             if validate_only:
-                # Match the permission decision made by insert(), so validation
-                # cannot promise a create that the same user may not perform.
-                doc.check_permission("create")
-
-                # Run validation without saving
-                doc.run_method("validate")
+                _validate_new_document(doc)
 
                 return add_master_data_review(
                     {
