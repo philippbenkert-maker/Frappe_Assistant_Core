@@ -19,6 +19,9 @@ Document Listing Tool for Core Plugin.
 Lists and searches Frappe documents with filtering capabilities.
 """
 
+import re
+import unicodedata
+from difflib import SequenceMatcher
 from typing import Any, Dict, List
 
 import frappe
@@ -46,6 +49,163 @@ FILTER_OPERATORS = {
     "ancestors of",
     "not ancestors of",
 }
+
+
+STANDARD_QUERY_FIELDS = {
+    "name",
+    "owner",
+    "creation",
+    "modified",
+    "modified_by",
+    "docstatus",
+    "idx",
+    "_assign",
+    "_comments",
+    "_liked_by",
+    "_seen",
+    "_user_tags",
+}
+SIMPLE_FIELDNAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+NON_QUERYABLE_FIELD_TYPES = {
+    "Section Break",
+    "Column Break",
+    "Tab Break",
+    "HTML",
+    "Button",
+    "Heading",
+    "Fold",
+}
+
+
+def _normalise_field_term(value: Any) -> str:
+    """Return a stable comparison form for field names and translated labels."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    return re.sub(r"[^a-z0-9]+", "_", text.casefold()).strip("_")
+
+
+def _field_exists(meta: Any, fieldname: Any) -> bool:
+    """Check simple query fields without rejecting Frappe's advanced expressions."""
+    fieldname = str(fieldname or "").strip()
+    if not fieldname:
+        return False
+    if fieldname in STANDARD_QUERY_FIELDS or fieldname == "*":
+        return True
+    if not SIMPLE_FIELDNAME.fullmatch(fieldname):
+        # Aggregates, aliases and qualified expressions remain Frappe's responsibility.
+        return True
+    try:
+        field = meta.get_field(fieldname)
+        return bool(field) and str(getattr(field, "fieldtype", "") or "") not in NON_QUERYABLE_FIELD_TYPES
+    except Exception:
+        return False
+
+
+def _filter_fieldnames(filters: Any) -> List[str]:
+    if isinstance(filters, dict):
+        return [str(fieldname) for fieldname in filters]
+    if not isinstance(filters, (list, tuple)) or not filters:
+        return []
+    if isinstance(filters[0], str):
+        return [str(filters[1] if len(filters) >= 4 else filters[0])]
+    fieldnames = []
+    for condition in filters:
+        if not isinstance(condition, (list, tuple)) or not condition:
+            continue
+        fieldnames.append(str(condition[1] if len(condition) >= 4 else condition[0]))
+    return fieldnames
+
+
+def _order_fieldnames(order_by: Any) -> List[str]:
+    if not isinstance(order_by, str) or order_by == "KEEP_DEFAULT_ORDERING":
+        return []
+    return [part.strip().split()[0] for part in order_by.split(",") if part.strip()]
+
+
+def field_suggestions(meta: Any, unknown: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Rank exact field names so a caller can repair a malformed query immediately."""
+    query = _normalise_field_term(unknown)
+    candidates = []
+    try:
+        fields = list(meta.fields or [])
+    except Exception:
+        fields = []
+
+    for field in fields:
+        fieldname = str(getattr(field, "fieldname", "") or "").strip()
+        fieldtype = str(getattr(field, "fieldtype", "") or "")
+        if (
+            not fieldname
+            or not SIMPLE_FIELDNAME.fullmatch(fieldname)
+            or fieldtype in NON_QUERYABLE_FIELD_TYPES
+        ):
+            continue
+        label = str(getattr(field, "label", "") or "")
+        field_score = SequenceMatcher(None, query, _normalise_field_term(fieldname)).ratio()
+        label_score = SequenceMatcher(None, query, _normalise_field_term(label)).ratio()
+        score = max(field_score, label_score)
+        if query.endswith("_name") and fieldname == "title":
+            score += 0.80
+        if query == "customer" and fieldname in {"party_name", "customer_name"}:
+            score += 0.35
+        candidates.append(
+            (
+                score,
+                {
+                    "fieldname": fieldname,
+                    "label": label or fieldname,
+                    "fieldtype": fieldtype,
+                },
+            )
+        )
+
+    candidates.sort(key=lambda item: (-item[0], item[1]["fieldname"]))
+    return [candidate for score, candidate in candidates[:limit] if score >= 0.50]
+
+
+def validate_query_fields(doctype: str, filters: Any, fields: Any, order_by: Any) -> Dict[str, Any]:
+    """Reject invented simple field names before Frappe reports them as permissions errors."""
+    try:
+        meta = frappe.get_meta(doctype)
+    except Exception:
+        return {}
+
+    invalid_filters = sorted(
+        {fieldname for fieldname in _filter_fieldnames(filters) if not _field_exists(meta, fieldname)}
+    )
+    invalid_fields = sorted(
+        {str(fieldname) for fieldname in (fields or []) if not _field_exists(meta, fieldname)}
+    )
+    invalid_order_by = sorted(
+        {fieldname for fieldname in _order_fieldnames(order_by) if not _field_exists(meta, fieldname)}
+    )
+    invalid = sorted(set(invalid_filters + invalid_fields + invalid_order_by))
+    if not invalid:
+        return {}
+
+    suggestions = {fieldname: field_suggestions(meta, fieldname) for fieldname in invalid}
+    locations = []
+    if invalid_filters:
+        locations.append("filters")
+    if invalid_fields:
+        locations.append("fields")
+    if invalid_order_by:
+        locations.append("order_by")
+    return {
+        "success": False,
+        "doctype": doctype,
+        "error_type": "invalid_query_fields",
+        "error": (
+            f"Unknown field name(s) in {', '.join(locations)}: {', '.join(invalid)}. "
+            "Retry with exact fieldname values from field_suggestions, or call "
+            "get_doctype_info when the intended field is unclear."
+        ),
+        "invalid_filters": invalid_filters,
+        "invalid_fields": invalid_fields,
+        "invalid_order_by": invalid_order_by,
+        "field_suggestions": suggestions,
+        "retryable": True,
+    }
 
 
 def is_submittable(doctype: str) -> bool:
@@ -280,12 +440,12 @@ class DocumentList(BaseTool):
                 "filters": {
                     "type": "object",
                     "default": {},
-                    "description": "Search filters as key-value pairs. Examples: {'status': 'Active'}, {'customer_type': 'Company'}, {'creation': ['>', '2024-01-01']}. Use empty {} to get all records. For submittable DocTypes, docstatus=1 (submitted) is applied automatically unless you set docstatus yourself — pass {'docstatus': 2} for cancelled, {'docstatus': [0, 1]} for drafts and submitted.",
+                    "description": "Search filters as key-value pairs using exact DocType field names. Examples: {'status': 'Active'}, {'customer_type': 'Company'}, {'creation': ['>', '2024-01-01']}. Use empty {} to get all records. Invalid field names return exact field_suggestions for an immediate retry. For submittable DocTypes, docstatus=1 (submitted) is applied automatically unless you set docstatus yourself — pass {'docstatus': 2} for cancelled, {'docstatus': [0, 1]} for drafts and submitted.",
                 },
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific fields to retrieve. Examples: ['name', 'customer_name', 'email'], ['name', 'item_name', 'item_code']. Leave empty to get standard fields.",
+                    "description": "Exact DocType field names to retrieve. Examples: ['name', 'customer_name', 'email'], ['name', 'item_name', 'item_code']. Invalid names return field_suggestions. Leave empty to get standard fields.",
                 },
                 "limit": {
                     "type": "integer",
@@ -295,7 +455,7 @@ class DocumentList(BaseTool):
                 },
                 "order_by": {
                     "type": "string",
-                    "description": "Order results by field. Examples: 'creation desc', 'name asc', 'modified desc'. Leave empty to use Frappe default ordering.",
+                    "description": "Order results by exact DocType field name. Examples: 'creation desc', 'name asc', 'modified desc'. Invalid names return field_suggestions. Leave empty to use Frappe default ordering.",
                 },
             },
             "required": ["doctype"],
@@ -339,6 +499,10 @@ class DocumentList(BaseTool):
             return validation_result
 
         user_role = validation_result["role"]
+
+        query_validation = validate_query_fields(doctype, filters, fields, order_by)
+        if query_validation:
+            return query_validation
 
         # SECURITY: Special handling for User DocType - non-admins can only see themselves
         if doctype == "User" and user_role in ["Assistant User", "Default"]:
