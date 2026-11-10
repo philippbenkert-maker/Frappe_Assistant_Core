@@ -88,6 +88,12 @@ The key is absent when every filter value resolves, so its absence confirms caus
 
 `success` stays `true` and `count` stays `0`: an unresolved filter is metadata, not an error.
 
+## Exact Field Names
+
+Every key in `filters`, every requested item in `fields`, and each `order_by` field must be an exact field name from that DocType. If the name is uncertain, call `get_doctype_info` first.
+
+An invalid name returns `error_type: invalid_query_fields` and `field_suggestions` with exact candidates. Retry with the intended candidate. This is a query correction, not a permission error.
+
 ## Filter Syntax
 
 ### Simple equality
