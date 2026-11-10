@@ -474,3 +474,28 @@ def test_unrelated_doctypes_do_not_query_supplier_data(env):
     assert "master_data_review" not in result
     env.frappe.get_list.assert_not_called()
     doc.insert.assert_called_once()
+
+
+def test_validate_only_sets_save_action_and_runs_frappe_validation_phase(env):
+    module = load_module(
+        env.monkeypatch,
+        "supplier_test_create_document_lifecycle",
+        "plugins/core/tools/create_document.py",
+    )
+    events = []
+    doc = Mock()
+    doc.flags = SimpleNamespace(in_insert=False)
+    doc._action = None
+    doc.run_before_save_methods.side_effect = lambda: events.append(("before_save", doc._action))
+    doc._validate.side_effect = lambda: events.append(("validate", doc._action))
+
+    module._validate_new_document(doc)
+
+    assert doc._action == "save"
+    assert doc.flags.in_insert is False
+    assert events == [("before_save", "save"), ("validate", "save")]
+    doc.check_permission.assert_called_once_with("create")
+    doc.set.assert_called_once_with("__islocal", True)
+    doc.run_method.assert_not_called()
+    doc.set_new_name.assert_not_called()
+    doc.insert.assert_not_called()
