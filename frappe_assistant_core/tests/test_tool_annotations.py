@@ -350,3 +350,17 @@ class TestToolProfiles(BaseAssistantTest):
         self.assertEqual(registry.get_default_tool_profile_name(), "kt-compact")
         self.assertEqual(second, first)
         get_hooks.assert_called_once_with("assistant_tool_profiles")
+
+    def test_hook_profile_allows_compact_description_budgets_below_global_setting_minimum(self):
+        from frappe_assistant_core.core import tool_registry
+
+        registry = tool_registry.ToolRegistry()
+        entries = [
+            {"name": "compact", "tools": ["read_a"], "max_description_chars": 60},
+            {"name": "bounded", "tools": ["read_b"], "max_description_chars": 12},
+        ]
+        with patch.object(tool_registry.frappe, "get_hooks", return_value=entries):
+            profiles = registry.get_tool_profiles()
+
+        self.assertEqual(profiles["compact"]["max_description_chars"], 60)
+        self.assertEqual(profiles["bounded"]["max_description_chars"], 40)

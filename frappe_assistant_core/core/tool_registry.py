@@ -289,7 +289,7 @@ class ToolRegistry:
                 except (TypeError, ValueError):
                     max_description_chars = 0
                 if max_description_chars:
-                    profile["max_description_chars"] = max(80, min(max_description_chars, 2_000))
+                    profile["max_description_chars"] = max(40, min(max_description_chars, 2_000))
                 profiles[name] = profile
         except Exception as e:
             self.logger.warning(f"Failed to load assistant tool profiles: {e}")
