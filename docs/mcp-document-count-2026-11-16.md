@@ -30,7 +30,7 @@ Afterwards all 54 standalone tests under `tests/` passed, including 15 count
 regressions. The existing Bench count tests were updated for v15/v16 syntax;
 their full Bench suite has not been run locally.
 
-The exact candidate module was additionally executed in memory against the
+The exact committed candidate module was additionally executed in memory against the
 live Frappe 16.56.0 read APIs under the authenticated user's permissions.
 All six checks passed: limited files (2 of 10), complete files (10 of 10),
 document ingress (1), submitted invoice (1), empty query (0), and Guest denial.
@@ -38,7 +38,7 @@ The transaction was rolled back. No application files, settings, business
 documents or permissions were changed, and no files were duplicated.
 
 Candidate module SHA-256:
-`333423b7c5f5aa721765e0edacc8f21ffa0fd9ddb31ae2bd3dedd64e181a8d45`.
+`62a01ed8a11cdf35f98e62bfc9065ded720343395846e31f7b3792aabd765d69`.
 
 This read-only probe is not a deployment or a substitute for the shared
 release's source-integrity, permission, restore and live-activation gates.
