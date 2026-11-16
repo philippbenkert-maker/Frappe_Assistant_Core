@@ -552,20 +552,27 @@ class DocumentList(BaseTool):
                 filtered_doc = filter_sensitive_fields(doc, doctype, user_role)
                 filtered_documents.append(filtered_doc)
 
-            # Get permission-aware total count for pagination info.
-            # Use string aggregate only — dict form causes "Unknown column 'table.scalar'"
-            # on MariaDB when filters include docstatus. See: FAC PR fix.
+            # v16 rejects SQL function strings; v15 uses the legacy query
+            # engine. Both queries retain exactly the row query's scope and
+            # permissions. A failed count is unknown, never a zero-row result.
+            total_count = None
             try:
+                major_version = int(str(frappe.__version__).split(".", 1)[0])
+                count_field = {"COUNT": "name", "as": "count"} if major_version >= 16 else "count(name) as count"
                 count_result = frappe.get_list(
                     doctype,
                     filters=filters,
-                    fields=["count(name) as count"],
+                    fields=[count_field],
                     limit=1,
                     ignore_permissions=False,
                 )
+                value = count_result[0].get("count") if count_result else None
+                # Reject missing/malformed counts and a count that contradicts
+                # the rows just returned (including concurrent deletions).
+                if type(value) is int and value >= len(filtered_documents):
+                    total_count = value
             except Exception:
-                count_result = []
-            total_count = count_result[0].get("count") if count_result else 0
+                pass
 
             message = f"Found {len(filtered_documents)} {doctype} records"
             if docstatus_defaulted:
@@ -573,6 +580,8 @@ class DocumentList(BaseTool):
                     " (submitted only — docstatus=1 applied by default; "
                     "pass docstatus explicitly to include drafts or cancelled documents)"
                 )
+            if total_count is None:
+                message += "; total count unavailable — do not treat this result as a complete list"
 
             result = {
                 "success": True,
@@ -580,7 +589,8 @@ class DocumentList(BaseTool):
                 "data": filtered_documents,
                 "count": len(filtered_documents),
                 "total_count": total_count,
-                "has_more": total_count > limit,
+                "count_status": "verified" if total_count is not None else "unavailable",
+                "has_more": total_count > len(filtered_documents) if total_count is not None else None,
                 "filters_applied": filters,
                 "message": message,
             }

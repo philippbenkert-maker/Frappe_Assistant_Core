@@ -24,6 +24,8 @@ Regression tests for:
 from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
+import frappe
+
 from frappe_assistant_core.plugins.core.tools.list_documents import DocumentList
 from frappe_assistant_core.tests.base_test import BaseAssistantTest
 
@@ -51,29 +53,15 @@ def list_harness(submittable=False, rows=None):
         yield gl
 
 
-class TestCountQueryNoDict(BaseAssistantTest):
-    """Bug A: dict-in-fields on count call causes MariaDB scalar column error.
+class TestCountQueryCompatibility(BaseAssistantTest):
+    """Use the structured v16 query and preserve the legacy v15 query."""
 
-    The old code used fields=[{"COUNT": "name", "as": "count"}] which fails on
-    MariaDB with: (1054) Unknown column 'table.scalar' in 'WHERE'
-    whenever filters include docstatus (applied automatically for submittable
-    DocTypes like Item Price and Sales Invoice).
-    """
-
-    def test_count_field_is_string_not_dict(self):
-        """Count query fields must be strings, never dicts."""
+    def test_count_field_is_structured_on_v16(self):
         tool = DocumentList()
-        with list_harness() as gl:
-            tool.execute({"doctype": "Customer"})
-            # The second get_list call is the count query
-            count_fields = gl.call_args_list[1][1].get("fields", [])
-            for f in count_fields:
-                self.assertIsInstance(
-                    f,
-                    str,
-                    f"Count field must be str, not {type(f).__name__}: {f!r}. "
-                    "Dict-in-fields causes 'Unknown column table.scalar' on MariaDB.",
-                )
+        with list_harness() as gl, patch.object(frappe, "__version__", "16.50.0"):
+            result = tool.execute({"doctype": "Customer"})
+            self.assertEqual(gl.call_args_list[1][1]["fields"], [{"COUNT": "name", "as": "count"}])
+            self.assertEqual(result["total_count"], 1)
 
     def test_count_does_not_raise_on_submittable_doctype(self):
         """Item Price + docstatus filter previously triggered the scalar error."""
@@ -92,10 +80,9 @@ class TestCountQueryNoDict(BaseAssistantTest):
             result = tool.execute({"doctype": "Sales Invoice"})
             self.assertTrue(result.get("success"), f"Got: {result}")
 
-    def test_count_string_aggregate_form(self):
-        """The count query must use the 'count(name) as count' string form."""
+    def test_count_string_aggregate_form_on_v15(self):
         tool = DocumentList()
-        with list_harness() as gl:
+        with list_harness() as gl, patch.object(frappe, "__version__", "15.92.0"):
             tool.execute({"doctype": "Customer"})
             count_fields = gl.call_args_list[1][1].get("fields", [])
             self.assertIn(
