@@ -96,8 +96,13 @@ class TestMCPScopedListNative(unittest.TestCase):
         self.assertEqual(rejected["error_type"], "invalid_query_fields")
         result = self.call("list_documents", arguments)
         self.assertEqual((result["count"], result["total_count"]), (4, 4))
+        self.assertEqual((result["count_status"], result["has_more"]), ("verified", False))
         self.assertEqual(result["data"][0]["name"], allowed[0])
         result_id = result["_mcp_continuation"]["result_id"]
+
+        limited = self.call("list_documents", {**arguments, "fields": ["name"], "limit": 1})
+        self.assertEqual(limited["data"], [{"name": allowed[0]}])
+        self.assertEqual((limited["count"], limited["total_count"], limited["has_more"]), (1, 4, True))
 
         for offset, name in enumerate(allowed):
             page = self.call("get_result_page", {"result_id": result_id, "path": "data", "offset": offset, "limit": 1})
@@ -111,3 +116,9 @@ class TestMCPScopedListNative(unittest.TestCase):
         own_result = self.call("list_documents", {**arguments, "fields": ["name"]})
         self.assertEqual(own_result["data"], [{"name": foreign}])
         self.assertEqual(own_result["total_count"], 1)
+        self.assertEqual(own_result["count_status"], "verified")
+        inaccessible = self.call(
+            "list_documents", {**arguments, "fields": ["name"], "filters": {"name": ["in", allowed]}},
+        )
+        self.assertEqual(inaccessible["data"], [])
+        self.assertEqual((inaccessible["total_count"], inaccessible["count_status"]), (0, "verified"))
