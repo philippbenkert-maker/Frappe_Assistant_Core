@@ -1,6 +1,7 @@
 """Exercise the MCP list and continuation against disposable Frappe data."""
 
 import json
+import os
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -18,7 +19,10 @@ from frappe_assistant_core.plugins.core.tools.list_documents import DocumentList
 class TestMCPScopedListNative(unittest.TestCase):
     def setUp(self):
         if frappe.local.site != "test_site" or not frappe.flags.in_test:
-            self.skipTest("Requires the disposable Frappe CI test site")
+            message = "Requires the disposable Frappe CI test site"
+            if os.environ.get("FAC_REQUIRE_NATIVE_SCOPE_TEST") == "1":
+                self.fail(message)
+            self.skipTest(message)
         self.original_user = frappe.session.user
         self.original_in_test = frappe.in_test
         self.marker = uuid4().hex[:12]
