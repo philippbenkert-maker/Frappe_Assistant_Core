@@ -392,6 +392,7 @@ class MCPServer:
         from frappe_assistant_core.mcp.token_optimizer import (
             compact_tool_result,
             get_optimization_config,
+            serialize_tool_result,
             update_audit_metrics,
         )
 
@@ -458,18 +459,7 @@ class MCPServer:
             optimization_config = get_optimization_config(frappe.session.user)
             result, metrics = compact_tool_result(result, frappe.session.user, optimization_config)
 
-            # Serialize the text result (default=str handles datetime, Decimal, etc.)
-            if isinstance(result, str):
-                result_text = result
-            else:
-                json_kwargs = {"default": str, "ensure_ascii": False}
-                if optimization_config.compact_json:
-                    json_kwargs["separators"] = (",", ":")
-                else:
-                    json_kwargs["indent"] = 2
-                result_text = json.dumps(result, **json_kwargs)
-
-            metrics["transmitted_bytes"] = len(result_text.encode("utf-8"))
+            result_text = serialize_tool_result(result, optimization_config.compact_json)
             update_audit_metrics(tool_name, arguments, metrics)
 
             # Build MCP content blocks

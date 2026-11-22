@@ -234,6 +234,14 @@ def compact_json_dumps(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
 
 
+def serialize_tool_result(value: Any, compact: bool) -> str:
+    if isinstance(value, str):
+        return value
+    if compact:
+        return compact_json_dumps(value)
+    return json.dumps(value, default=str, ensure_ascii=False, indent=2)
+
+
 def estimate_tokens_from_chars(char_count: int) -> int:
     """Conservative telemetry estimate; billing must use provider usage data."""
     return int(math.ceil(max(0, char_count) / 4.0))
@@ -296,7 +304,7 @@ def compact_tool_result(
     config: MCPOptimizationConfig,
 ) -> Tuple[Any, Dict[str, Any]]:
     """Apply the configured response budget and retain a pageable full result."""
-    serialized = compact_json_dumps(value)
+    serialized = serialize_tool_result(value, config.compact_json)
     original_chars = len(serialized)
     metrics = {
         "original_chars": original_chars,
@@ -310,7 +318,8 @@ def compact_tool_result(
     if not config.enabled or original_chars <= config.max_result_chars:
         return value, metrics
 
-    result_id = store_serialized_result(serialized, user, config.result_ttl_seconds)
+    cached_json = compact_json_dumps(value) if isinstance(value, str) else serialized
+    result_id = store_serialized_result(cached_json, user, config.result_ttl_seconds)
     max_items = config.max_result_items
     max_string_chars = config.max_string_chars
     preview = _compact_value(value, max_items, max_string_chars)
@@ -333,7 +342,7 @@ def compact_tool_result(
 
     # Tighten recursively if unusually wide dictionaries still exceed budget.
     for _ in range(8):
-        preview_text = compact_json_dumps(preview)
+        preview_text = serialize_tool_result(preview, config.compact_json)
         if len(preview_text) <= config.max_result_chars:
             break
         max_items = max(1, max_items // 2)
@@ -346,11 +355,15 @@ def compact_tool_result(
     else:
         preview = {"_mcp_continuation": continuation}
 
-    transmitted_chars = len(compact_json_dumps(preview))
+    preview_text = serialize_tool_result(preview, config.compact_json)
+    if len(preview_text) > config.max_result_chars:
+        continuation.pop("available_list_paths")
+        preview_text = serialize_tool_result(preview, config.compact_json)
+    transmitted_chars = len(preview_text)
     metrics.update(
         {
             "transmitted_chars": transmitted_chars,
-            "transmitted_bytes": len(compact_json_dumps(preview).encode("utf-8")),
+            "transmitted_bytes": len(preview_text.encode("utf-8")),
             "estimated_tokens": estimate_tokens_from_chars(transmitted_chars),
             "truncated": True,
             "result_id": result_id,
