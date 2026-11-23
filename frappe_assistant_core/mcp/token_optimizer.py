@@ -271,7 +271,11 @@ def _list_paths(value: Any, prefix: str = "", depth: int = 0) -> List[Tuple[str,
         paths.append((prefix or "$", len(value)))
     elif isinstance(value, dict):
         for key, item in value.items():
-            child = f"{prefix}.{key}" if prefix else str(key)
+            # A hint must round-trip through the resolver's dot notation.
+            # Unaddressable object keys remain available in the full JSON text.
+            if not isinstance(key, str) or not key or "." in key or (not prefix and key == "$"):
+                continue
+            child = f"{prefix}.{key}" if prefix else key
             paths.extend(_list_paths(item, child, depth + 1))
     return paths
 

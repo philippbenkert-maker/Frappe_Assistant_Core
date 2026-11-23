@@ -112,6 +112,44 @@ def test_oversized_result_gets_continuation_and_hard_budget():
     assert len(compact_json_dumps(compacted)) <= config.max_result_chars
 
 
+def test_continuation_only_hints_paths_it_can_read_without_losing_the_full_result():
+    cache = {}
+
+    def cache_result(key, value, **_kwargs):
+        cache[key] = value
+
+    frappe = SimpleNamespace(cache=SimpleNamespace(set_value=cache_result, get_value=cache.get))
+    owner = "owner@example.invalid"
+    config = MCPOptimizationConfig(max_result_chars=2000)
+    value = {"report": {"2026.11": ["monthly total"] * 300}, "$": ["separate key"] * 350}
+
+    with patch.dict(sys.modules, {"frappe": frappe}):
+        # With no addressable list, even the default request must page the whole result.
+        preview, _ = compact_tool_result(value, owner, config)
+        continuation = preview["_mcp_continuation"]
+        assert continuation["available_list_paths"] == []
+        result_id = continuation["result_id"]
+        page = read_result_page(result_id, owner, config=config)
+        assert page["path"] == "$"
+        chunks = [page["text"]]
+        while page["has_more"]:
+            assert len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+            assert page["next_offset"] > page["offset"]
+            page = read_result_page(result_id, owner, path="$", offset=page["next_offset"],
+                                    as_text=True, config=config)
+            chunks.append(page["text"])
+        assert json.loads("".join(chunks)) == value
+
+        # A reachable list still uses the existing dotted path and structured pages.
+        value["report"]["entries"] = ["first", "second"]
+        preview, _ = compact_tool_result(value, owner, config)
+        continuation = preview["_mcp_continuation"]
+        assert continuation["available_list_paths"] == [{"path": "report.entries", "items": 2}]
+        page = read_result_page(continuation["result_id"], owner, config=config)
+        assert page["path"] == "report.entries"
+        assert page["items"] == ["first", "second"]
+
+
 def test_small_result_is_unchanged():
     value = {"success": True, "data": [1, 2, 3]}
     compacted, metrics = compact_tool_result(
