@@ -168,6 +168,43 @@ def test_pretty_tool_reply_is_budgeted_in_its_actual_format():
     assert json.loads(store.call_args.args[0]) == value
 
 
+def test_direct_tool_errors_respect_the_wire_budget_without_a_continuation():
+    from frappe_assistant_core.mcp.server import MCPServer
+
+    budget = MCPOptimizationConfig(max_result_chars=2000)
+    details = "Synthetic " + ("diagnostic " * 350)
+    frappe = SimpleNamespace(
+        session=SimpleNamespace(user="synthetic@example.invalid"),
+        local=SimpleNamespace(),
+        logger=lambda: SimpleNamespace(debug=lambda *_: None, info=lambda *_: None, error=lambda *_: None),
+    )
+
+    def fail():
+        raise RuntimeError(details)
+
+    with (
+        patch.dict(sys.modules, {"frappe": frappe}),
+        patch("frappe_assistant_core.mcp.token_optimizer.get_optimization_config", return_value=budget),
+        patch("frappe_assistant_core.mcp.token_optimizer.store_serialized_result") as store,
+    ):
+        server = MCPServer("local")
+        thrown = server._handle_tools_call({"name": "synthetic"}, {"synthetic": {"fn": fail}})
+        unknown = server._handle_tools_call({"name": details}, {})
+        ordinary = server._handle_tools_call({"name": "missing"}, {})
+        budget.enabled = False
+        unbounded = server._handle_tools_call({"name": "synthetic"}, {"synthetic": {"fn": fail}})
+
+    for reply in (thrown, unknown):
+        assert reply["isError"] is True
+        text = reply["content"][0]["text"]
+        assert len(text) <= budget.max_result_chars
+        assert text.endswith("[error text truncated]")
+    assert thrown["content"][0]["text"].startswith("Error executing synthetic: Synthetic")
+    assert ordinary["content"][0]["text"] == "Tool 'missing' is not available for the current user or tool profile."
+    assert unbounded["content"][0]["text"] == f"Error executing synthetic: {details}"
+    store.assert_not_called()
+
+
 def test_compaction_drops_path_hints_that_exceed_the_budget():
     value = {"long-key-" + "x" * 5000: [1, 2, 3]}
     config = MCPOptimizationConfig(max_result_chars=2000)

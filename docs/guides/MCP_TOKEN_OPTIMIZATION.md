@@ -62,7 +62,9 @@ permissions, plugin status, and individual tool configuration still apply.
 Every MCP result passes through the central response budget. When a result is
 too large, the response contains `_mcp_continuation` with a `result_id`,
 available list paths, and arguments for `get_result_page`. Cached results are
-bound to the calling user and expire automatically.
+bound to the calling user and expire automatically. Direct errors from an
+unavailable tool or an unexpected exception are capped at the same character
+limit. These errors do not create a cached continuation.
 
 Use `business_report` for report discovery, filter requirements, and compact
 execution. It returns a numeric summary and a bounded row preview, with paging

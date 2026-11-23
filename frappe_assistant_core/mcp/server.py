@@ -405,14 +405,18 @@ class MCPServer:
         argument_keys = sorted(arguments) if isinstance(arguments, dict) else []
         frappe.logger().debug(f"MCP _handle_tools_call: tool={tool_name}, argument_keys={argument_keys}")
 
+        def error_reply(text):
+            config = get_optimization_config(frappe.session.user)
+            if config.enabled and len(text) > config.max_result_chars:
+                suffix = " [error text truncated]"
+                text = text[:config.max_result_chars - len(suffix)] + suffix
+            return {"content": [{"type": "text", "text": text}], "isError": True}
+
         # Check tool exists
         if tool_name not in tool_registry:
             error_msg = f"Tool '{tool_name}' is not available for the current user or tool profile."
             frappe.logger().error(f"MCP Tool Not Found: {error_msg}")
-            return {
-                "content": [{"type": "text", "text": error_msg}],
-                "isError": True,
-            }
+            return error_reply(error_msg)
 
         tool = tool_registry[tool_name]
         fn = tool["fn"]
@@ -492,7 +496,7 @@ class MCPServer:
             error_text = f"Error executing {tool_name}: {str(e)}"
             frappe.logger().error(f"MCP Tool Execution Error: {error_text}\n{traceback_text}")
 
-            return {"content": [{"type": "text", "text": error_text}], "isError": True}
+            return error_reply(error_text)
 
     def _success_response(self, response: Response, request_id: Any, result: Dict) -> Response:
         """Create JSON-RPC success response."""
