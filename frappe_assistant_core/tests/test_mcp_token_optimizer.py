@@ -121,7 +121,11 @@ def test_continuation_only_hints_paths_it_can_read_without_losing_the_full_resul
     frappe = SimpleNamespace(cache=SimpleNamespace(set_value=cache_result, get_value=cache.get))
     owner = "owner@example.invalid"
     config = MCPOptimizationConfig(max_result_chars=2000)
-    value = {"report": {"2026.11": ["monthly total"] * 300}, "$": ["separate key"] * 350}
+    value = {
+        "report": {"2026.11": ["monthly total"] * 300, "empty": []},
+        "rows": [],
+        "$": ["separate key"] * 350,
+    }
 
     with patch.dict(sys.modules, {"frappe": frappe}):
         # With no addressable list, even the default request must page the whole result.
@@ -139,6 +143,9 @@ def test_continuation_only_hints_paths_it_can_read_without_losing_the_full_resul
                                     as_text=True, config=config)
             chunks.append(page["text"])
         assert json.loads("".join(chunks)) == value
+        explicit_empty = read_result_page(result_id, owner, path="rows", config=config)
+        assert explicit_empty["items"] == []
+        assert explicit_empty["has_more"] is False
 
         # A reachable list still uses the existing dotted path and structured pages.
         value["report"]["entries"] = ["first", "second"]

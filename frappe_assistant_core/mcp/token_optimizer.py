@@ -266,10 +266,10 @@ def _compact_value(value: Any, max_items: int, max_string_chars: int, depth: int
 def _list_paths(value: Any, prefix: str = "", depth: int = 0) -> List[Tuple[str, int]]:
     if depth > 8:
         return []
-    paths = []
     if isinstance(value, list):
-        paths.append((prefix or "$", len(value)))
-    elif isinstance(value, dict):
+        return [(prefix or "$", len(value))] if value else []
+    paths = []
+    if isinstance(value, dict):
         for key, item in value.items():
             # A hint must round-trip through the resolver's dot notation.
             # Unaddressable object keys remain available in the full JSON text.
