@@ -157,6 +157,38 @@ def test_continuation_only_hints_paths_it_can_read_without_losing_the_full_resul
         assert page["items"] == ["first", "second"]
 
 
+def test_continuation_defaults_to_the_advertised_list_after_json_normalization():
+    owner = "owner@example.invalid"
+    value = {"preview": ["summary"], "rows": tuple((f"ROW-{i}", "Wärme " * 50) for i in range(18))}
+
+    for compact in (True, False):
+        cache = {}
+
+        def save(key, content, **_kwargs):
+            cache[key] = content
+
+        frappe = SimpleNamespace(cache=SimpleNamespace(set_value=save, get_value=cache.get))
+        config = MCPOptimizationConfig(max_result_chars=2000, compact_json=compact)
+        with patch.dict(sys.modules, {"frappe": frappe}):
+            preview, _ = compact_tool_result(value, owner, config)
+            continuation = preview["_mcp_continuation"]
+            assert continuation["available_list_paths"][0] == {"path": "rows", "items": 18}
+            assert len(serialize_tool_result(preview, compact)) <= config.max_result_chars
+
+            result_id = continuation["result_id"]
+            page = read_result_page(result_id, owner, config=config)
+            recovered = []
+            while True:
+                assert page["path"] == "rows"
+                assert len(serialize_tool_result(page, compact)) <= config.max_result_chars
+                recovered.extend(page["items"])
+                if not page["has_more"]:
+                    break
+                assert page["next_offset"] == len(recovered) > page["offset"]
+                page = read_result_page(result_id, owner, path=page["path"], offset=page["next_offset"], config=config)
+            assert recovered == [list(row) for row in value["rows"]]
+
+
 def test_small_result_is_unchanged():
     value = {"success": True, "data": [1, 2, 3]}
     compacted, metrics = compact_tool_result(
