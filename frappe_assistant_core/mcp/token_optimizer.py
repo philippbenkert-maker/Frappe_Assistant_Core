@@ -184,31 +184,23 @@ def select_tool_metadata(
     """Return the deterministic, profile-specific tool subset.
 
     ``Full`` is an explicit escape hatch and therefore intentionally ignores
-    ``max_tools``.  Custom profiles always retain the paging tool when it is
-    installed, because large-result continuation depends on it.
+    ``max_tools``. Bounded profiles reserve a slot for the paging tool when
+    it is available to the current user, since any tool can return a continuation.
     """
     if not config.enabled or config.profile == "Full":
         return list(tools)
 
     by_name = {tool.get("name"): tool for tool in tools if tool.get("name")}
     if config.profile == "Custom":
-        order = list(config.custom_tools)
-        if "get_result_page" in by_name and "get_result_page" not in order:
-            order.append("get_result_page")
+        order = config.custom_tools
     else:
         order = list(PROFILE_TOOL_ORDER.get(config.profile, LEAN_TOOL_ORDER))
 
     selected = [by_name[name] for name in order if name in by_name]
     selected = selected[: config.max_tools]
-    if (
-        config.profile == "Custom"
-        and "get_result_page" in by_name
-        and not any(tool.get("name") == "get_result_page" for tool in selected)
-    ):
-        if len(selected) >= config.max_tools:
-            selected[-1] = by_name["get_result_page"]
-        else:
-            selected.append(by_name["get_result_page"])
+    if "get_result_page" in by_name and not any(tool["name"] == "get_result_page" for tool in selected):
+        selected = selected[: config.max_tools - 1]
+        selected.append(by_name["get_result_page"])
     return selected
 
 
@@ -232,6 +224,14 @@ def concise_description(description: str, max_chars: int = 280) -> str:
 
 def compact_json_dumps(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":"))
+
+
+def serialize_tool_result(value: Any, compact: bool) -> str:
+    if isinstance(value, str):
+        return value
+    if compact:
+        return compact_json_dumps(value)
+    return json.dumps(value, default=str, ensure_ascii=False, indent=2)
 
 
 def estimate_tokens_from_chars(char_count: int) -> int:
@@ -266,12 +266,16 @@ def _compact_value(value: Any, max_items: int, max_string_chars: int, depth: int
 def _list_paths(value: Any, prefix: str = "", depth: int = 0) -> List[Tuple[str, int]]:
     if depth > 8:
         return []
-    paths = []
     if isinstance(value, list):
-        paths.append((prefix or "$", len(value)))
-    elif isinstance(value, dict):
+        return [(prefix or "$", len(value))] if value else []
+    paths = []
+    if isinstance(value, dict):
         for key, item in value.items():
-            child = f"{prefix}.{key}" if prefix else str(key)
+            # A hint must round-trip through the resolver's dot notation.
+            # Unaddressable object keys remain available in the full JSON text.
+            if not isinstance(key, str) or not key or "." in key or (not prefix and key == "$"):
+                continue
+            child = f"{prefix}.{key}" if prefix else key
             paths.extend(_list_paths(item, child, depth + 1))
     return paths
 
@@ -296,7 +300,7 @@ def compact_tool_result(
     config: MCPOptimizationConfig,
 ) -> Tuple[Any, Dict[str, Any]]:
     """Apply the configured response budget and retain a pageable full result."""
-    serialized = compact_json_dumps(value)
+    serialized = serialize_tool_result(value, config.compact_json)
     original_chars = len(serialized)
     metrics = {
         "original_chars": original_chars,
@@ -310,7 +314,8 @@ def compact_tool_result(
     if not config.enabled or original_chars <= config.max_result_chars:
         return value, metrics
 
-    result_id = store_serialized_result(serialized, user, config.result_ttl_seconds)
+    cached_json = compact_json_dumps(value) if isinstance(value, str) else serialized
+    result_id = store_serialized_result(cached_json, user, config.result_ttl_seconds)
     max_items = config.max_result_items
     max_string_chars = config.max_string_chars
     preview = _compact_value(value, max_items, max_string_chars)
@@ -333,7 +338,7 @@ def compact_tool_result(
 
     # Tighten recursively if unusually wide dictionaries still exceed budget.
     for _ in range(8):
-        preview_text = compact_json_dumps(preview)
+        preview_text = serialize_tool_result(preview, config.compact_json)
         if len(preview_text) <= config.max_result_chars:
             break
         max_items = max(1, max_items // 2)
@@ -346,11 +351,15 @@ def compact_tool_result(
     else:
         preview = {"_mcp_continuation": continuation}
 
-    transmitted_chars = len(compact_json_dumps(preview))
+    preview_text = serialize_tool_result(preview, config.compact_json)
+    if len(preview_text) > config.max_result_chars:
+        continuation.pop("available_list_paths")
+        preview_text = serialize_tool_result(preview, config.compact_json)
+    transmitted_chars = len(preview_text)
     metrics.update(
         {
             "transmitted_chars": transmitted_chars,
-            "transmitted_bytes": len(compact_json_dumps(preview).encode("utf-8")),
+            "transmitted_bytes": len(preview_text.encode("utf-8")),
             "estimated_tokens": estimate_tokens_from_chars(transmitted_chars),
             "truncated": True,
             "result_id": result_id,
@@ -375,14 +384,47 @@ def _resolve_path(value: Any, path: Optional[str]) -> Tuple[Any, str]:
     return current, path
 
 
+def _fit_result_page(build_page, length: int, config: Optional[MCPOptimizationConfig]) -> Dict[str, Any]:
+    if config is None or not config.enabled:
+        return build_page(length)
+
+    def fits(page):
+        return len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+
+    # Check the complete page first. Its final offset metadata may be shorter
+    # than intermediate pages once there is no further content.
+    length = min(length, config.max_result_chars)
+    page = build_page(length)
+    if fits(page):
+        return page
+
+    best = build_page(0)
+    if not fits(best):
+        raise ValueError("Result path exceeds the page budget. Use path '$' with as_text to read the whole result.")
+
+    low, high = 1, length - 1
+    while low <= high:
+        middle = (low + high) // 2
+        page = build_page(middle)
+        if fits(page):
+            best = page
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
 def read_result_page(
     result_id: str,
     user: str,
     path: Optional[str] = None,
     offset: int = 0,
     limit: int = 20,
+    *,
+    as_text: bool = False,
+    config: Optional[MCPOptimizationConfig] = None,
 ) -> Dict[str, Any]:
-    """Read a user-bound list page or text chunk from a retained result."""
+    """Read a user-bound page that can be returned without another continuation."""
     import frappe
 
     cached = frappe.cache.get_value(_cache_key(result_id))
@@ -395,38 +437,49 @@ def read_result_page(
         raise PermissionError("Result belongs to a different user")
 
     value = json.loads(payload["serialized"])
-    target, resolved_path = _resolve_path(value, path)
+    target, resolved_path = (value, "$") if as_text and path == "$" else _resolve_path(value, path)
     offset = max(0, int(offset or 0))
     limit = max(1, min(int(limit or 20), 100))
 
-    if isinstance(target, list):
-        page = target[offset : offset + limit]
-        next_offset = offset + len(page)
+    def offsets(length, total):
+        last = offset + length
         return {
             "result_id": result_id,
             "path": resolved_path,
             "offset": offset,
-            "limit": limit,
-            "items": page,
-            "total_items": len(target),
-            "has_more": next_offset < len(target),
-            "next_offset": next_offset if next_offset < len(target) else None,
+            "has_more": last < total,
+            "next_offset": last if last < total else None,
         }
 
-    text = target if isinstance(target, str) else compact_json_dumps(target)
-    chunk_chars = min(limit * 500, 20_000)
-    chunk = text[offset : offset + chunk_chars]
-    next_offset = offset + len(chunk)
-    return {
-        "result_id": result_id,
-        "path": resolved_path,
-        "offset": offset,
-        "text": chunk,
-        "total_chars": len(text),
-        "has_more": next_offset < len(text),
-        "next_offset": next_offset if next_offset < len(text) else None,
-    }
+    if isinstance(target, list) and not as_text:
+        total = len(target)
 
+        def list_page(length):
+            return {**offsets(length, total), "limit": limit, "items": target[offset : offset + length],
+                    "total_items": total}
+
+        page = _fit_result_page(list_page, max(0, min(limit, total - offset)), config)
+        if page["items"] or not page["has_more"]:
+            return page
+
+        # An individual row does not fit. Start a textual view of the same
+        # retained list so the caller can still recover every original byte.
+        offset = 0
+        as_text = True
+
+    text = target if isinstance(target, str) else compact_json_dumps(target)
+    total = len(text)
+
+    def text_page(length):
+        page = {**offsets(length, total), "text": text[offset : offset + length], "total_chars": total}
+        if as_text:
+            page["as_text"] = True
+        return page
+
+    page = _fit_result_page(text_page, max(0, min(limit * 500, 20_000, total - offset)), config)
+    if not page["text"] and page["has_more"]:
+        raise ValueError("No text fits in the page budget. Use path '$' with as_text to read the whole result.")
+    return page
 
 def update_audit_metrics(tool_name: str, arguments: Dict[str, Any], metrics: Dict[str, Any]) -> None:
     """Attach MCP wire-size telemetry to the audit row created by BaseTool."""

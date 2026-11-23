@@ -13,6 +13,7 @@ from frappe_assistant_core.mcp.token_optimizer import (
     parse_tool_list,
     read_result_page,
     select_tool_metadata,
+    serialize_tool_result,
 )
 
 
@@ -40,8 +41,19 @@ def test_lean_profile_is_deterministic_and_bounded():
         "fetch",
         "list_documents",
         "get_document",
-        "business_report",
+        "get_result_page",
     ]
+
+
+def test_bounded_profiles_keep_only_permitted_continuation_tools():
+    tools = _tools("search", "fetch", "get_result_page", "delete_document")
+    for profile in ("Lean", "Standard", "Custom"):
+        config = MCPOptimizationConfig(profile=profile, custom_tools=("search", "fetch"), max_tools=2)
+        assert [tool["name"] for tool in select_tool_metadata(tools, config)] == ["search", "get_result_page"]
+        assert select_tool_metadata(tools[:2], config) == tools[:2]
+
+        config.max_tools = 1
+        assert select_tool_metadata(tools, config) == tools[2:3]
 
 
 def test_full_profile_is_explicit_escape_hatch():
@@ -100,6 +112,51 @@ def test_oversized_result_gets_continuation_and_hard_budget():
     assert len(compact_json_dumps(compacted)) <= config.max_result_chars
 
 
+def test_continuation_only_hints_paths_it_can_read_without_losing_the_full_result():
+    cache = {}
+
+    def cache_result(key, value, **_kwargs):
+        cache[key] = value
+
+    frappe = SimpleNamespace(cache=SimpleNamespace(set_value=cache_result, get_value=cache.get))
+    owner = "owner@example.invalid"
+    config = MCPOptimizationConfig(max_result_chars=2000)
+    value = {
+        "report": {"2026.11": ["monthly total"] * 300, "empty": []},
+        "rows": [],
+        "$": ["separate key"] * 350,
+    }
+
+    with patch.dict(sys.modules, {"frappe": frappe}):
+        # With no addressable list, even the default request must page the whole result.
+        preview, _ = compact_tool_result(value, owner, config)
+        continuation = preview["_mcp_continuation"]
+        assert continuation["available_list_paths"] == []
+        result_id = continuation["result_id"]
+        page = read_result_page(result_id, owner, config=config)
+        assert page["path"] == "$"
+        chunks = [page["text"]]
+        while page["has_more"]:
+            assert len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+            assert page["next_offset"] > page["offset"]
+            page = read_result_page(result_id, owner, path="$", offset=page["next_offset"],
+                                    as_text=True, config=config)
+            chunks.append(page["text"])
+        assert json.loads("".join(chunks)) == value
+        explicit_empty = read_result_page(result_id, owner, path="rows", config=config)
+        assert explicit_empty["items"] == []
+        assert explicit_empty["has_more"] is False
+
+        # A reachable list still uses the existing dotted path and structured pages.
+        value["report"]["entries"] = ["first", "second"]
+        preview, _ = compact_tool_result(value, owner, config)
+        continuation = preview["_mcp_continuation"]
+        assert continuation["available_list_paths"] == [{"path": "report.entries", "items": 2}]
+        page = read_result_page(continuation["result_id"], owner, config=config)
+        assert page["path"] == "report.entries"
+        assert page["items"] == ["first", "second"]
+
+
 def test_small_result_is_unchanged():
     value = {"success": True, "data": [1, 2, 3]}
     compacted, metrics = compact_tool_result(
@@ -131,3 +188,153 @@ def test_result_pages_are_user_bound():
             pass
         else:  # pragma: no cover - assertion branch
             raise AssertionError("cross-user result access must be denied")
+
+
+def test_pretty_tool_reply_is_budgeted_in_its_actual_format():
+    from frappe_assistant_core.mcp.server import MCPServer
+
+    config = MCPOptimizationConfig(max_result_chars=2000, max_result_items=2, compact_json=False)
+    value = {"data": [{"name": f"SYNTHETIC-{n}", "description": "Wärme"} for n in range(30)]}
+    assert len(compact_json_dumps(value)) <= config.max_result_chars
+    assert len(serialize_tool_result(value, False)) > config.max_result_chars
+    metrics = {}
+    fake_frappe = SimpleNamespace(
+        session=SimpleNamespace(user="synthetic@example.invalid"),
+        local=SimpleNamespace(),
+        logger=lambda: SimpleNamespace(debug=lambda *_: None, info=lambda *_: None),
+    )
+
+    with (
+        patch.dict(sys.modules, {"frappe": fake_frappe}),
+        patch("frappe_assistant_core.mcp.token_optimizer.get_optimization_config", return_value=config),
+        patch("frappe_assistant_core.mcp.token_optimizer.store_serialized_result", return_value="owned-result") as store,
+        patch("frappe_assistant_core.mcp.token_optimizer.update_audit_metrics",
+              side_effect=lambda _tool, _args, recorded: metrics.update(recorded)),
+    ):
+        reply = MCPServer("local")._handle_tools_call(
+            {"name": "synthetic_tool"}, {"synthetic_tool": {"fn": lambda: value}},
+        )
+
+    text = reply["content"][0]["text"]
+    assert not reply["isError"]
+    assert len(text) <= config.max_result_chars
+    assert metrics["transmitted_chars"] == len(text)
+    assert metrics["transmitted_bytes"] == len(text.encode("utf-8"))
+    assert json.loads(text)["_mcp_continuation"]["result_id"] == "owned-result"
+    assert json.loads(store.call_args.args[0]) == value
+
+
+def test_direct_tool_errors_respect_the_wire_budget_without_a_continuation():
+    from frappe_assistant_core.mcp.server import MCPServer
+
+    budget = MCPOptimizationConfig(max_result_chars=2000)
+    details = "Synthetic " + ("diagnostic " * 350)
+    frappe = SimpleNamespace(
+        session=SimpleNamespace(user="synthetic@example.invalid"),
+        local=SimpleNamespace(),
+        logger=lambda: SimpleNamespace(debug=lambda *_: None, info=lambda *_: None, error=lambda *_: None),
+    )
+
+    def fail():
+        raise RuntimeError(details)
+
+    with (
+        patch.dict(sys.modules, {"frappe": frappe}),
+        patch("frappe_assistant_core.mcp.token_optimizer.get_optimization_config", return_value=budget),
+        patch("frappe_assistant_core.mcp.token_optimizer.store_serialized_result") as store,
+    ):
+        server = MCPServer("local")
+        thrown = server._handle_tools_call({"name": "synthetic"}, {"synthetic": {"fn": fail}})
+        unknown = server._handle_tools_call({"name": details}, {})
+        ordinary = server._handle_tools_call({"name": "missing"}, {})
+        budget.enabled = False
+        unbounded = server._handle_tools_call({"name": "synthetic"}, {"synthetic": {"fn": fail}})
+
+    for reply in (thrown, unknown):
+        assert reply["isError"] is True
+        text = reply["content"][0]["text"]
+        assert len(text) <= budget.max_result_chars
+        assert text.endswith("[error text truncated]")
+    assert thrown["content"][0]["text"].startswith("Error executing synthetic: Synthetic")
+    assert ordinary["content"][0]["text"] == "Tool 'missing' is not available for the current user or tool profile."
+    assert unbounded["content"][0]["text"] == f"Error executing synthetic: {details}"
+    store.assert_not_called()
+
+
+def test_compaction_drops_path_hints_that_exceed_the_budget():
+    value = {"long-key-" + "x" * 5000: [1, 2, 3]}
+    config = MCPOptimizationConfig(max_result_chars=2000)
+    with patch("frappe_assistant_core.mcp.token_optimizer.store_serialized_result", return_value="owned-result"):
+        reply, _metrics = compact_tool_result(value, "synthetic@example.invalid", config)
+    assert len(serialize_tool_result(reply, config.compact_json)) <= config.max_result_chars
+    continuation = reply["_mcp_continuation"]
+    assert "available_list_paths" not in continuation
+    assert continuation["next"]["arguments"]["result_id"] == "owned-result"
+
+
+def test_plain_text_budget_matches_wire_and_keeps_valid_cached_json():
+    config = MCPOptimizationConfig(max_result_chars=2000)
+    value = '"' * config.max_result_chars
+    unchanged, metrics = compact_tool_result(value, "synthetic@example.invalid", config)
+    assert unchanged == value
+    assert not metrics["truncated"]
+    longer = value + "ü"
+    with patch("frappe_assistant_core.mcp.token_optimizer.store_serialized_result", return_value="owned-result") as store:
+        reply, metrics = compact_tool_result(longer, "synthetic@example.invalid", config)
+    assert metrics["truncated"]
+    assert json.loads(store.call_args.args[0]) == longer
+    assert len(serialize_tool_result(reply, config.compact_json)) <= config.max_result_chars
+
+
+def test_continuation_reduces_list_page_without_losing_items():
+    owner = "owner@example.invalid"
+    value = [{"name": f"ROW-{index}", "description": "Wärme " * 120} for index in range(6)]
+    config = MCPOptimizationConfig(max_result_chars=2000, compact_json=False)
+    payload = {"user": owner, "serialized": json.dumps({"data": value})}
+    fake_frappe = SimpleNamespace(cache=SimpleNamespace(get_value=lambda _key: payload))
+
+    with patch.dict(sys.modules, {"frappe": fake_frappe}):
+        rebuilt = []
+        offset = 0
+        while True:
+            page = read_result_page("owned-result", owner, path="data", offset=offset, limit=6, config=config)
+            assert page["result_id"] == "owned-result" and page["total_items"] == len(value)
+            assert 0 < len(page["items"]) < len(value)
+            assert len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+            rebuilt.extend(page["items"])
+            if not page["has_more"]:
+                break
+            assert page["next_offset"] == offset + len(page["items"]) > offset
+            offset = page["next_offset"]
+    assert rebuilt == value
+
+
+def test_large_individual_row_is_recoverable_without_a_nested_continuation():
+    owner = "owner@example.invalid"
+    value = [{"name": "ROW-SMALL"}, {"name": "ROW-LARGE", "description": ('" Wärme \\ 雪\n' * 600)}]
+    payload = {"user": owner, "serialized": json.dumps({"data": value})}
+    fake_frappe = SimpleNamespace(cache=SimpleNamespace(get_value=lambda _key: payload))
+
+    with patch.dict(sys.modules, {"frappe": fake_frappe}):
+        for compact in (False, True):
+            config = MCPOptimizationConfig(max_result_chars=2000, compact_json=compact)
+            first = read_result_page("owned-result", owner, path="data", limit=20, config=config)
+            assert first["items"] == value[:1] and first["next_offset"] == 1
+            page = read_result_page("owned-result", owner, path="data", offset=1, limit=20, config=config)
+            assert page["as_text"] and page["offset"] == 0
+            chunks = []
+            while True:
+                result, metrics = compact_tool_result(page, owner, config)
+                assert result == page and not metrics["truncated"]
+                assert 0 < len(page["text"]) and page["result_id"] == "owned-result"
+                chunks.append(page["text"])
+                if not page["has_more"]:
+                    break
+                assert page["next_offset"] == page["offset"] + len(page["text"])
+                page = read_result_page("owned-result", owner, path=page["path"], offset=page["next_offset"],
+                                        limit=20, as_text=page["as_text"], config=config)
+            assert json.loads("".join(chunks)) == value
+
+        with patch("frappe_assistant_core.mcp.token_optimizer._resolve_path", side_effect=AssertionError):
+            root_page = read_result_page("owned-result", owner, path="$", as_text=True, limit=1, config=config)
+        assert root_page["path"] == "$" and root_page["text"].startswith('{"data":[')

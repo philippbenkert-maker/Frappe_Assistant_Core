@@ -392,6 +392,7 @@ class MCPServer:
         from frappe_assistant_core.mcp.token_optimizer import (
             compact_tool_result,
             get_optimization_config,
+            serialize_tool_result,
             update_audit_metrics,
         )
 
@@ -404,14 +405,18 @@ class MCPServer:
         argument_keys = sorted(arguments) if isinstance(arguments, dict) else []
         frappe.logger().debug(f"MCP _handle_tools_call: tool={tool_name}, argument_keys={argument_keys}")
 
+        def error_reply(text):
+            config = get_optimization_config(frappe.session.user)
+            if config.enabled and len(text) > config.max_result_chars:
+                suffix = " [error text truncated]"
+                text = text[:config.max_result_chars - len(suffix)] + suffix
+            return {"content": [{"type": "text", "text": text}], "isError": True}
+
         # Check tool exists
         if tool_name not in tool_registry:
             error_msg = f"Tool '{tool_name}' is not available for the current user or tool profile."
             frappe.logger().error(f"MCP Tool Not Found: {error_msg}")
-            return {
-                "content": [{"type": "text", "text": error_msg}],
-                "isError": True,
-            }
+            return error_reply(error_msg)
 
         tool = tool_registry[tool_name]
         fn = tool["fn"]
@@ -458,18 +463,7 @@ class MCPServer:
             optimization_config = get_optimization_config(frappe.session.user)
             result, metrics = compact_tool_result(result, frappe.session.user, optimization_config)
 
-            # Serialize the text result (default=str handles datetime, Decimal, etc.)
-            if isinstance(result, str):
-                result_text = result
-            else:
-                json_kwargs = {"default": str, "ensure_ascii": False}
-                if optimization_config.compact_json:
-                    json_kwargs["separators"] = (",", ":")
-                else:
-                    json_kwargs["indent"] = 2
-                result_text = json.dumps(result, **json_kwargs)
-
-            metrics["transmitted_bytes"] = len(result_text.encode("utf-8"))
+            result_text = serialize_tool_result(result, optimization_config.compact_json)
             update_audit_metrics(tool_name, arguments, metrics)
 
             # Build MCP content blocks
@@ -502,7 +496,7 @@ class MCPServer:
             error_text = f"Error executing {tool_name}: {str(e)}"
             frappe.logger().error(f"MCP Tool Execution Error: {error_text}\n{traceback_text}")
 
-            return {"content": [{"type": "text", "text": error_text}], "isError": True}
+            return error_reply(error_text)
 
     def _success_response(self, response: Response, request_id: Any, result: Dict) -> Response:
         """Create JSON-RPC success response."""

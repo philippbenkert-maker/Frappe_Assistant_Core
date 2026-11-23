@@ -48,7 +48,11 @@ Open a **User** record and set **Assistant MCP Tool Profile**:
 - `Standard` additionally provides document create/update and workflow actions.
 - `Full` exposes every otherwise permitted tool and should be temporary.
 - `Custom` uses the comma- or newline-separated names in **Assistant MCP
-  Allowed Tools**. FAC automatically retains `get_result_page`.
+  Allowed Tools**.
+
+Lean, Standard, and Custom reserve one slot within the maximum for
+`get_result_page` when it is permitted for the user. A limit of one leaves
+only the paging tool when it is available.
 
 For a high-consumption user such as Adrian, use `Lean` unless write operations
 are genuinely needed. Use `Standard` for those sessions and return the user to
@@ -62,7 +66,9 @@ permissions, plugin status, and individual tool configuration still apply.
 Every MCP result passes through the central response budget. When a result is
 too large, the response contains `_mcp_continuation` with a `result_id`,
 available list paths, and arguments for `get_result_page`. Cached results are
-bound to the calling user and expire automatically.
+bound to the calling user and expire automatically. Direct errors from an
+unavailable tool or an unexpected exception are capped at the same character
+limit. These errors do not create a cached continuation.
 
 Use `business_report` for report discovery, filter requirements, and compact
 execution. It returns a numeric summary and a bounded row preview, with paging

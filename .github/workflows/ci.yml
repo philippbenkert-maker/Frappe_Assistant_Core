@@ -119,3 +119,10 @@ jobs:
           bench --site test_site run-tests --app frappe_assistant_core
         env:
           TYPE: server
+
+      - name: Verify native MCP role, filter and response limits
+        working-directory: /home/runner/frappe-bench
+        run: bench --site test_site run-tests --module frappe_assistant_core.tests.test_mcp_scoped_list_native
+        env:
+          TYPE: server
+          FAC_REQUIRE_NATIVE_SCOPE_TEST: "1"
