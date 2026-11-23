@@ -388,14 +388,47 @@ def _resolve_path(value: Any, path: Optional[str]) -> Tuple[Any, str]:
     return current, path
 
 
+def _fit_result_page(build_page, length: int, config: Optional[MCPOptimizationConfig]) -> Dict[str, Any]:
+    if config is None or not config.enabled:
+        return build_page(length)
+
+    def fits(page):
+        return len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+
+    # Check the complete page first. Its final offset metadata may be shorter
+    # than intermediate pages once there is no further content.
+    length = min(length, config.max_result_chars)
+    page = build_page(length)
+    if fits(page):
+        return page
+
+    best = build_page(0)
+    if not fits(best):
+        raise ValueError("Result path exceeds the page budget. Use path '$' with as_text to read the whole result.")
+
+    low, high = 1, length - 1
+    while low <= high:
+        middle = (low + high) // 2
+        page = build_page(middle)
+        if fits(page):
+            best = page
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
 def read_result_page(
     result_id: str,
     user: str,
     path: Optional[str] = None,
     offset: int = 0,
     limit: int = 20,
+    *,
+    as_text: bool = False,
+    config: Optional[MCPOptimizationConfig] = None,
 ) -> Dict[str, Any]:
-    """Read a user-bound list page or text chunk from a retained result."""
+    """Read a user-bound page that can be returned without another continuation."""
     import frappe
 
     cached = frappe.cache.get_value(_cache_key(result_id))
@@ -408,38 +441,49 @@ def read_result_page(
         raise PermissionError("Result belongs to a different user")
 
     value = json.loads(payload["serialized"])
-    target, resolved_path = _resolve_path(value, path)
+    target, resolved_path = (value, "$") if as_text and path == "$" else _resolve_path(value, path)
     offset = max(0, int(offset or 0))
     limit = max(1, min(int(limit or 20), 100))
 
-    if isinstance(target, list):
-        page = target[offset : offset + limit]
-        next_offset = offset + len(page)
+    def offsets(length, total):
+        last = offset + length
         return {
             "result_id": result_id,
             "path": resolved_path,
             "offset": offset,
-            "limit": limit,
-            "items": page,
-            "total_items": len(target),
-            "has_more": next_offset < len(target),
-            "next_offset": next_offset if next_offset < len(target) else None,
+            "has_more": last < total,
+            "next_offset": last if last < total else None,
         }
 
-    text = target if isinstance(target, str) else compact_json_dumps(target)
-    chunk_chars = min(limit * 500, 20_000)
-    chunk = text[offset : offset + chunk_chars]
-    next_offset = offset + len(chunk)
-    return {
-        "result_id": result_id,
-        "path": resolved_path,
-        "offset": offset,
-        "text": chunk,
-        "total_chars": len(text),
-        "has_more": next_offset < len(text),
-        "next_offset": next_offset if next_offset < len(text) else None,
-    }
+    if isinstance(target, list) and not as_text:
+        total = len(target)
 
+        def list_page(length):
+            return {**offsets(length, total), "limit": limit, "items": target[offset : offset + length],
+                    "total_items": total}
+
+        page = _fit_result_page(list_page, max(0, min(limit, total - offset)), config)
+        if page["items"] or not page["has_more"]:
+            return page
+
+        # An individual row does not fit. Start a textual view of the same
+        # retained list so the caller can still recover every original byte.
+        offset = 0
+        as_text = True
+
+    text = target if isinstance(target, str) else compact_json_dumps(target)
+    total = len(text)
+
+    def text_page(length):
+        page = {**offsets(length, total), "text": text[offset : offset + length], "total_chars": total}
+        if as_text:
+            page["as_text"] = True
+        return page
+
+    page = _fit_result_page(text_page, max(0, min(limit * 500, 20_000, total - offset)), config)
+    if not page["text"] and page["has_more"]:
+        raise ValueError("No text fits in the page budget. Use path '$' with as_text to read the whole result.")
+    return page
 
 def update_audit_metrics(tool_name: str, arguments: Dict[str, Any], metrics: Dict[str, Any]) -> None:
     """Attach MCP wire-size telemetry to the audit row created by BaseTool."""

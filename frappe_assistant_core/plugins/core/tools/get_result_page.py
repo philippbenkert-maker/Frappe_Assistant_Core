@@ -8,7 +8,7 @@ from typing import Any, Dict
 import frappe
 
 from frappe_assistant_core.core.base_tool import BaseTool
-from frappe_assistant_core.mcp.token_optimizer import read_result_page
+from frappe_assistant_core.mcp.token_optimizer import get_optimization_config, read_result_page
 
 
 class GetResultPage(BaseTool):
@@ -17,7 +17,7 @@ class GetResultPage(BaseTool):
         self.name = "get_result_page"
         self.description = (
             "Read the next page of an earlier MCP result using its result_id. "
-            "Use the path and next_offset returned by the previous response."
+            "Use the returned path and next_offset, and keep as_text=true when returned."
         )
         self.requires_permission = None
         self.inputSchema = {
@@ -37,6 +37,10 @@ class GetResultPage(BaseTool):
                     "default": 0,
                     "description": "Zero-based item or character offset.",
                 },
+                "as_text": {
+                    "type": "boolean",
+                    "description": "Keep reading the retained result as text when returned in the response.",
+                },
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -49,12 +53,15 @@ class GetResultPage(BaseTool):
         }
 
     def execute(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        user = frappe.session.user
         return read_result_page(
             result_id=arguments.get("result_id", ""),
-            user=frappe.session.user,
+            user=user,
             path=arguments.get("path"),
             offset=arguments.get("offset", 0),
             limit=arguments.get("limit", 20),
+            as_text=arguments.get("as_text", False),
+            config=get_optimization_config(user),
         )
 
 

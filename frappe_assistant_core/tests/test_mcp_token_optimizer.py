@@ -191,3 +191,57 @@ def test_plain_text_budget_matches_wire_and_keeps_valid_cached_json():
     assert metrics["truncated"]
     assert json.loads(store.call_args.args[0]) == longer
     assert len(serialize_tool_result(reply, config.compact_json)) <= config.max_result_chars
+
+
+def test_continuation_reduces_list_page_without_losing_items():
+    owner = "owner@example.invalid"
+    value = [{"name": f"ROW-{index}", "description": "Wärme " * 120} for index in range(6)]
+    config = MCPOptimizationConfig(max_result_chars=2000, compact_json=False)
+    payload = {"user": owner, "serialized": json.dumps({"data": value})}
+    fake_frappe = SimpleNamespace(cache=SimpleNamespace(get_value=lambda _key: payload))
+
+    with patch.dict(sys.modules, {"frappe": fake_frappe}):
+        rebuilt = []
+        offset = 0
+        while True:
+            page = read_result_page("owned-result", owner, path="data", offset=offset, limit=6, config=config)
+            assert page["result_id"] == "owned-result" and page["total_items"] == len(value)
+            assert 0 < len(page["items"]) < len(value)
+            assert len(serialize_tool_result(page, config.compact_json)) <= config.max_result_chars
+            rebuilt.extend(page["items"])
+            if not page["has_more"]:
+                break
+            assert page["next_offset"] == offset + len(page["items"]) > offset
+            offset = page["next_offset"]
+    assert rebuilt == value
+
+
+def test_large_individual_row_is_recoverable_without_a_nested_continuation():
+    owner = "owner@example.invalid"
+    value = [{"name": "ROW-SMALL"}, {"name": "ROW-LARGE", "description": ('" Wärme \\ 雪\n' * 600)}]
+    payload = {"user": owner, "serialized": json.dumps({"data": value})}
+    fake_frappe = SimpleNamespace(cache=SimpleNamespace(get_value=lambda _key: payload))
+
+    with patch.dict(sys.modules, {"frappe": fake_frappe}):
+        for compact in (False, True):
+            config = MCPOptimizationConfig(max_result_chars=2000, compact_json=compact)
+            first = read_result_page("owned-result", owner, path="data", limit=20, config=config)
+            assert first["items"] == value[:1] and first["next_offset"] == 1
+            page = read_result_page("owned-result", owner, path="data", offset=1, limit=20, config=config)
+            assert page["as_text"] and page["offset"] == 0
+            chunks = []
+            while True:
+                result, metrics = compact_tool_result(page, owner, config)
+                assert result == page and not metrics["truncated"]
+                assert 0 < len(page["text"]) and page["result_id"] == "owned-result"
+                chunks.append(page["text"])
+                if not page["has_more"]:
+                    break
+                assert page["next_offset"] == page["offset"] + len(page["text"])
+                page = read_result_page("owned-result", owner, path=page["path"], offset=page["next_offset"],
+                                        limit=20, as_text=page["as_text"], config=config)
+            assert json.loads("".join(chunks)) == value
+
+        with patch("frappe_assistant_core.mcp.token_optimizer._resolve_path", side_effect=AssertionError):
+            root_page = read_result_page("owned-result", owner, path="$", as_text=True, limit=1, config=config)
+        assert root_page["path"] == "$" and root_page["text"].startswith('{"data":[')
