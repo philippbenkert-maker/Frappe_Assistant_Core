@@ -184,31 +184,23 @@ def select_tool_metadata(
     """Return the deterministic, profile-specific tool subset.
 
     ``Full`` is an explicit escape hatch and therefore intentionally ignores
-    ``max_tools``.  Custom profiles always retain the paging tool when it is
-    installed, because large-result continuation depends on it.
+    ``max_tools``. Bounded profiles reserve a slot for the paging tool when
+    it is available to the current user, since any tool can return a continuation.
     """
     if not config.enabled or config.profile == "Full":
         return list(tools)
 
     by_name = {tool.get("name"): tool for tool in tools if tool.get("name")}
     if config.profile == "Custom":
-        order = list(config.custom_tools)
-        if "get_result_page" in by_name and "get_result_page" not in order:
-            order.append("get_result_page")
+        order = config.custom_tools
     else:
         order = list(PROFILE_TOOL_ORDER.get(config.profile, LEAN_TOOL_ORDER))
 
     selected = [by_name[name] for name in order if name in by_name]
     selected = selected[: config.max_tools]
-    if (
-        config.profile == "Custom"
-        and "get_result_page" in by_name
-        and not any(tool.get("name") == "get_result_page" for tool in selected)
-    ):
-        if len(selected) >= config.max_tools:
-            selected[-1] = by_name["get_result_page"]
-        else:
-            selected.append(by_name["get_result_page"])
+    if "get_result_page" in by_name and not any(tool["name"] == "get_result_page" for tool in selected):
+        selected = selected[: config.max_tools - 1]
+        selected.append(by_name["get_result_page"])
     return selected
 
 

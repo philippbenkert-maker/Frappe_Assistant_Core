@@ -41,8 +41,19 @@ def test_lean_profile_is_deterministic_and_bounded():
         "fetch",
         "list_documents",
         "get_document",
-        "business_report",
+        "get_result_page",
     ]
+
+
+def test_bounded_profiles_keep_only_permitted_continuation_tools():
+    tools = _tools("search", "fetch", "get_result_page", "delete_document")
+    for profile in ("Lean", "Standard", "Custom"):
+        config = MCPOptimizationConfig(profile=profile, custom_tools=("search", "fetch"), max_tools=2)
+        assert [tool["name"] for tool in select_tool_metadata(tools, config)] == ["search", "get_result_page"]
+        assert select_tool_metadata(tools[:2], config) == tools[:2]
+
+        config.max_tools = 1
+        assert select_tool_metadata(tools, config) == tools[2:3]
 
 
 def test_full_profile_is_explicit_escape_hatch():
