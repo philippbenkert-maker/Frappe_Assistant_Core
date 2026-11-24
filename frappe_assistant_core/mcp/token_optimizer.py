@@ -319,7 +319,8 @@ def compact_tool_result(
     max_items = config.max_result_items
     max_string_chars = config.max_string_chars
     preview = _compact_value(value, max_items, max_string_chars)
-    paths = sorted(_list_paths(value), key=lambda item: item[1], reverse=True)[:10]
+    # Discover paths from the same JSON representation that paging reads.
+    paths = sorted(_list_paths(json.loads(cached_json)), key=lambda item: item[1], reverse=True)[:10]
 
     continuation = {
         "truncated": True,

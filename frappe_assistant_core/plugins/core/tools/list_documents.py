@@ -220,23 +220,7 @@ def is_submittable(doctype: str) -> bool:
 
 def filters_reference_docstatus(filters: Any) -> bool:
     """True when the caller already constrained docstatus, in any supported filter form."""
-    if isinstance(filters, dict):
-        return "docstatus" in filters
-
-    if isinstance(filters, (list, tuple)):
-        # A single unwrapped condition, e.g. ["docstatus", "=", 1]
-        if filters and isinstance(filters[0], str):
-            return "docstatus" in filters
-
-        for condition in filters:
-            if not isinstance(condition, (list, tuple)) or not condition:
-                continue
-            # ["doctype", "fieldname", op, value] or ["fieldname", op, value]
-            fieldname = condition[1] if len(condition) >= 4 else condition[0]
-            if fieldname == "docstatus":
-                return True
-
-    return False
+    return "docstatus" in _filter_fieldnames(filters)
 
 
 def normalize_docstatus_filter(filters: Any) -> Any:
@@ -270,6 +254,9 @@ def apply_default_docstatus(doctype: str, filters: Any) -> tuple:
 
     Returns (filters, applied) where `applied` says whether the default was added.
     """
+    if isinstance(filters, (list, tuple)) and filters and isinstance(filters[0], str):
+        filters = [list(filters)]
+
     if not is_submittable(doctype):
         return filters, False
 
@@ -282,9 +269,7 @@ def apply_default_docstatus(doctype: str, filters: Any) -> tuple:
         return defaulted, True
 
     if isinstance(filters, (list, tuple)):
-        # An unwrapped condition such as ["status", "=", "Paid"] has to be nested first.
-        conditions = [list(filters)] if filters and isinstance(filters[0], str) else list(filters)
-        return conditions + [["docstatus", "=", 1]], True
+        return [*filters, ["docstatus", "=", 1]], True
 
     return {"docstatus": 1}, True
 
@@ -438,9 +423,9 @@ class DocumentList(BaseTool):
                     "description": "The Frappe DocType to search (e.g., 'Customer', 'Sales Invoice', 'Item', 'User'). Must match exact DocType name.",
                 },
                 "filters": {
-                    "type": "object",
+                    "anyOf": [{"type": "object"}, {"type": "array"}],
                     "default": {},
-                    "description": "Search filters as key-value pairs using exact DocType field names. Examples: {'status': 'Active'}, {'customer_type': 'Company'}, {'creation': ['>', '2024-01-01']}. Use empty {} to get all records. Invalid field names return exact field_suggestions for an immediate retry. For submittable DocTypes, docstatus=1 (submitted) is applied automatically unless you set docstatus yourself — pass {'docstatus': 2} for cancelled, {'docstatus': [0, 1]} for drafts and submitted.",
+                    "description": "AND filters using exact field names. Pass a mapping such as {'status': 'Active'}, a condition [field, operator, value], or a list of conditions. Conditions may include a DocType as the first item. Invalid field names return field_suggestions. For submittable DocTypes, docstatus=1 is the default unless explicitly filtered.",
                 },
                 "fields": {
                     "type": "array",
@@ -460,6 +445,23 @@ class DocumentList(BaseTool):
             },
             "required": ["doctype"],
         }
+
+    def validate_arguments(self, arguments: Dict[str, Any]) -> None:
+        super().validate_arguments(arguments)
+        filters = arguments.get("filters", {})
+        if isinstance(filters, dict):
+            return
+        if isinstance(filters, list):
+            conditions = [filters] if filters and isinstance(filters[0], str) else filters
+            if all(
+                isinstance(condition, list)
+                and len(condition) in (3, 4)
+                and all(isinstance(part, str) for part in condition[:-1])
+                for condition in conditions
+            ):
+                return
+        frappe.throw(_("Filters must be a mapping or a list of Frappe AND conditions."), frappe.ValidationError)
+
 
     def execute(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """List documents with filters"""
@@ -504,18 +506,23 @@ class DocumentList(BaseTool):
         if query_validation:
             return query_validation
 
-        # SECURITY: Special handling for User DocType - non-admins can only see themselves
-        if doctype == "User" and user_role in ["Assistant User", "Default"]:
-            # Filter to only show current user
-            if not filters:
-                filters = {}
-            filters["name"] = current_user
-
         # Submittable DocTypes default to submitted documents only, so cancelled and
         # draft records never reach a consumer that is summing monetary fields.
         filters, docstatus_defaulted = apply_default_docstatus(doctype, filters)
 
         try:
+            # Keep the caller's conditions and intersect them with their own User record.
+            if doctype == "User" and user_role in ["Assistant User", "Default"]:
+                if isinstance(filters, dict) and "name" in filters:
+                    filters = [
+                        [field, value[0], value[1]] if isinstance(value, (list, tuple)) else [field, "=", value]
+                        for field, value in filters.items()
+                    ]
+                if isinstance(filters, (list, tuple)) and filters:
+                    filters = [*filters, ["name", "=", current_user]]
+                else:
+                    filters = {**(filters or {}), "name": current_user}
+
             # Filter sensitive fields from requested fields for Assistant Users
             from frappe_assistant_core.core.security_config import ADMIN_ONLY_FIELDS, SENSITIVE_FIELDS
 

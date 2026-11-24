@@ -100,3 +100,63 @@ def test_submitted_filter_applies_to_rows_and_count(env):
     for call in env.frappe.get_list.call_args_list:
         assert call.kwargs["filters"] == {"docstatus": 1}
         assert call.kwargs["ignore_permissions"] is False
+
+
+@pytest.mark.parametrize("condition", [
+    ["title", "=", "docstatus"],
+    ["Sales Invoice", "title", "=", "docstatus"],
+])
+def test_docstatus_as_filter_value_does_not_remove_submitted_default(env, condition):
+    env.frappe.get_meta.return_value = SimpleNamespace(is_submittable=True)
+    env.frappe.get_list.side_effect = [[{"name": "INV-1"}], [{"count": 1}]]
+
+    result = env.tool.execute({"doctype": "Sales Invoice", "filters": condition, "fields": ["name"]})
+
+    expected = [condition, ["docstatus", "=", 1]]
+    assert result["success"] and result["filters_applied"] == expected
+    assert result["total_count"] == 1 and result["has_more"] is False
+    assert [call.kwargs["filters"] for call in env.frappe.get_list.call_args_list] == [expected, expected]
+
+
+@pytest.mark.parametrize("condition", [["docstatus", "=", 2], ["Sales Invoice", "docstatus", "=", 2]])
+def test_single_explicit_docstatus_filter_stays_explicit(env, condition):
+    env.frappe.get_meta.return_value = SimpleNamespace(is_submittable=True)
+    env.frappe.get_list.side_effect = [[{"name": "INV-1"}], [{"count": 1}]]
+
+    result = env.tool.execute({"doctype": "Sales Invoice", "filters": condition, "fields": ["name"]})
+
+    assert result["success"] and result["filters_applied"] == [condition]
+    assert [call.kwargs["filters"] for call in env.frappe.get_list.call_args_list] == [[condition], [condition]]
+
+
+@pytest.mark.parametrize("role", ["Default", "Assistant User"])
+def test_user_scope_keeps_existing_list_conditions(env, role):
+    env.security.validate_document_access.return_value = {"success": True, "role": role}
+    env.frappe.get_list.side_effect = [[], [{"count": 0}]]
+    requested = [["enabled", "=", 1]]
+
+    result = env.tool.execute({"doctype": "User", "filters": requested, "fields": ["name"]})
+
+    expected = [["enabled", "=", 1], ["name", "=", env.frappe.session.user]]
+    assert requested == [["enabled", "=", 1]]
+    assert result["success"] and result["filters_applied"] == expected and result["total_count"] == 0
+    for call in env.frappe.get_list.call_args_list:
+        assert call.kwargs["filters"] == expected and call.kwargs["ignore_permissions"] is False
+
+
+@pytest.mark.parametrize("requested_name, condition", [
+    ("other@example.invalid", ["name", "=", "other@example.invalid"]),
+    (["!=", "operator@example.invalid"], ["name", "!=", "operator@example.invalid"]),
+    (["in", ["operator@example.invalid", "other@example.invalid"]],
+     ["name", "in", ["operator@example.invalid", "other@example.invalid"]]),
+])
+def test_user_scope_intersects_mapping_name_conditions(env, requested_name, condition):
+    env.frappe.get_list.side_effect = [[], [{"count": 0}]]
+    requested = {"name": requested_name, "enabled": 1}
+    result = env.tool.execute({"doctype": "User", "filters": requested, "fields": ["name"]})
+
+    expected = [condition, ["enabled", "=", 1], ["name", "=", env.frappe.session.user]]
+    assert requested == {"name": requested_name, "enabled": 1}
+    assert result["success"] and result["total_count"] == 0
+    for call in env.frappe.get_list.call_args_list:
+        assert call.kwargs["filters"] == expected and call.kwargs["ignore_permissions"] is False
