@@ -220,23 +220,7 @@ def is_submittable(doctype: str) -> bool:
 
 def filters_reference_docstatus(filters: Any) -> bool:
     """True when the caller already constrained docstatus, in any supported filter form."""
-    if isinstance(filters, dict):
-        return "docstatus" in filters
-
-    if isinstance(filters, (list, tuple)):
-        # A single unwrapped condition, e.g. ["docstatus", "=", 1]
-        if filters and isinstance(filters[0], str):
-            return "docstatus" in filters
-
-        for condition in filters:
-            if not isinstance(condition, (list, tuple)) or not condition:
-                continue
-            # ["doctype", "fieldname", op, value] or ["fieldname", op, value]
-            fieldname = condition[1] if len(condition) >= 4 else condition[0]
-            if fieldname == "docstatus":
-                return True
-
-    return False
+    return "docstatus" in _filter_fieldnames(filters)
 
 
 def normalize_docstatus_filter(filters: Any) -> Any:
@@ -270,6 +254,9 @@ def apply_default_docstatus(doctype: str, filters: Any) -> tuple:
 
     Returns (filters, applied) where `applied` says whether the default was added.
     """
+    if isinstance(filters, (list, tuple)) and filters and isinstance(filters[0], str):
+        filters = [list(filters)]
+
     if not is_submittable(doctype):
         return filters, False
 
@@ -282,9 +269,7 @@ def apply_default_docstatus(doctype: str, filters: Any) -> tuple:
         return defaulted, True
 
     if isinstance(filters, (list, tuple)):
-        # An unwrapped condition such as ["status", "=", "Paid"] has to be nested first.
-        conditions = [list(filters)] if filters and isinstance(filters[0], str) else list(filters)
-        return conditions + [["docstatus", "=", 1]], True
+        return [*filters, ["docstatus", "=", 1]], True
 
     return {"docstatus": 1}, True
 
@@ -504,16 +489,16 @@ class DocumentList(BaseTool):
         if query_validation:
             return query_validation
 
-        # SECURITY: Special handling for User DocType - non-admins can only see themselves
-        if doctype == "User" and user_role in ["Assistant User", "Default"]:
-            # Filter to only show current user
-            if not filters:
-                filters = {}
-            filters["name"] = current_user
-
         # Submittable DocTypes default to submitted documents only, so cancelled and
         # draft records never reach a consumer that is summing monetary fields.
         filters, docstatus_defaulted = apply_default_docstatus(doctype, filters)
+
+        # Non-admins can only query their own User record.
+        if doctype == "User" and user_role in ["Assistant User", "Default"]:
+            if isinstance(filters, (list, tuple)) and filters:
+                filters = [*filters, ["name", "=", current_user]]
+            else:
+                filters = {**(filters or {}), "name": current_user}
 
         try:
             # Filter sensitive fields from requested fields for Assistant Users
