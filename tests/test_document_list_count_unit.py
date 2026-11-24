@@ -142,3 +142,21 @@ def test_user_scope_keeps_existing_list_conditions(env, role):
     assert result["success"] and result["filters_applied"] == expected and result["total_count"] == 0
     for call in env.frappe.get_list.call_args_list:
         assert call.kwargs["filters"] == expected and call.kwargs["ignore_permissions"] is False
+
+
+@pytest.mark.parametrize("requested_name, condition", [
+    ("other@example.invalid", ["name", "=", "other@example.invalid"]),
+    (["!=", "operator@example.invalid"], ["name", "!=", "operator@example.invalid"]),
+    (["in", ["operator@example.invalid", "other@example.invalid"]],
+     ["name", "in", ["operator@example.invalid", "other@example.invalid"]]),
+])
+def test_user_scope_intersects_mapping_name_conditions(env, requested_name, condition):
+    env.frappe.get_list.side_effect = [[], [{"count": 0}]]
+    requested = {"name": requested_name, "enabled": 1}
+    result = env.tool.execute({"doctype": "User", "filters": requested, "fields": ["name"]})
+
+    expected = [condition, ["enabled", "=", 1], ["name", "=", env.frappe.session.user]]
+    assert requested == {"name": requested_name, "enabled": 1}
+    assert result["success"] and result["total_count"] == 0
+    for call in env.frappe.get_list.call_args_list:
+        assert call.kwargs["filters"] == expected and call.kwargs["ignore_permissions"] is False
